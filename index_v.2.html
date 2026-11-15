@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tabletop Market - step 1b</title>
+<script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; }
+  #note { position: fixed; left: 12px; top: 12px; z-index: 10; background: rgba(0,0,0,.7);
+          color: #fff; padding: 10px 14px; border-radius: 8px; font-size: 14px; max-width: 340px; line-height: 1.4; }
+</style>
+</head>
+<body>
+
+<div id="note">
+  <b>Tabletop Market, step 1.</b><br>
+  On a computer: click a team panel to test a pick.<br>
+  On the Quest: press the <b>AR</b> button in the bottom corner, then point at a team panel and pull the trigger, or pinch your thumb and finger if you are using your hands.
+</div>
+
+<script>
+/* ======================================================================
+   SETTINGS - these are the numbers you can change. Distances are in meters.
+   After you try it in the headset, adjust these so the court sits on YOUR table.
+   ====================================================================== */
+const SETTINGS = {
+  tableHeight: 0.75,   // how high your table is from the floor (0.75 m is about 30 inches)
+  distance:    0.70,   // how far in front of you the court appears
+  courtScale:  1.0,    // 1.0 = court is 60 cm long. Use 1.5 for bigger, 0.7 for smaller.
+  teamA: { name: "Brooklyn", odds: 34, color: "#7F77DD" },   // SAMPLE numbers for now
+  teamB: { name: "Memphis",  odds: 66, color: "#1D9E75" },   // real Gemini odds come in step 2
+  scoreLine: "BKN 54   MEM 61",
+  clockLine: "sample score - not live yet"
+};
+</script>
+
+<script>
+/* ======================================================================
+   POINTER - makes picking work in the headset with EITHER controllers
+   (pull the trigger) OR bare hands (pinch thumb and index finger).
+   It listens for the headset's own "select" signal, so it does not care
+   which one you are using.
+   ====================================================================== */
+AFRAME.registerComponent("xr-pointer", {
+  init: function () {
+    const THREE = AFRAME.THREE, sceneEl = this.el;
+    this.ray = new THREE.Raycaster();
+    this.mat = new THREE.Matrix4();
+    this.origin = new THREE.Vector3();
+    this.dir = new THREE.Vector3();
+    // two thin white lines that show where each hand or controller is pointing
+    this.lines = [0, 1].map(() => {
+      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1.2)]);
+      const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xffffff }));
+      l.matrixAutoUpdate = false; l.visible = false; l.frustumCulled = false;
+      sceneEl.object3D.add(l);
+      return l;
+    });
+    sceneEl.addEventListener("enter-vr", () => {
+      const session = sceneEl.renderer.xr.getSession();
+      if (!session) return;
+      session.addEventListener("select", (e) => this.onSelect(e));
+    });
+  },
+  onSelect: function (e) {
+    const sceneEl = this.el, refSpace = sceneEl.renderer.xr.getReferenceSpace();
+    if (!refSpace || !e.inputSource || !e.inputSource.targetRaySpace) return;
+    const pose = e.frame.getPose(e.inputSource.targetRaySpace, refSpace);
+    if (!pose) return;
+    this.mat.fromArray(pose.transform.matrix);
+    this.origin.setFromMatrixPosition(this.mat);
+    this.dir.set(0, 0, -1).transformDirection(this.mat);
+    this.ray.set(this.origin, this.dir);
+    const targets = Array.from(document.querySelectorAll(".clickable")).map((el) => el.object3D);
+    const hits = this.ray.intersectObjects(targets, true);
+    if (!hits.length) return;
+    let o = hits[0].object;
+    while (o && !o.el) o = o.parent;
+    if (o && o.el) o.el.emit("click");
+  },
+  tick: function () {
+    const sceneEl = this.el, xr = sceneEl.renderer && sceneEl.renderer.xr;
+    const session = xr && xr.getSession && xr.getSession();
+    const frame = sceneEl.frame, refSpace = xr && xr.getReferenceSpace && xr.getReferenceSpace();
+    let i = 0;
+    if (session && frame && refSpace) {
+      for (const src of session.inputSources) {
+        if (i > 1 || !src.targetRaySpace || src.targetRayMode !== "tracked-pointer") continue;
+        const pose = frame.getPose(src.targetRaySpace, refSpace);
+        if (!pose) continue;
+        this.lines[i].matrix.fromArray(pose.transform.matrix);
+        this.lines[i].visible = true;
+        i++;
+      }
+    }
+    for (; i < 2; i++) this.lines[i].visible = false;
+  }
+});
+</script>
+
+<a-scene xr-mode-ui="XRMode: xr" renderer="alpha: true; antialias: true"
+         webxr="optionalFeatures: hand-tracking, bounded-floor"
+         cursor="rayOrigin: mouse" raycaster="objects: .clickable" xr-pointer>
+
+  <!-- Your head and hands -->
+  <a-entity id="cam" camera look-controls wasd-controls position="0 1.6 0"></a-entity>
+
+  <a-entity light="type: ambient; intensity: 1.0"></a-entity>
+  <a-entity light="type: directional; intensity: 1.2" position="1 3 2"></a-entity>
+
+  <!-- A plain floor and backdrop that only show on a computer screen, never in the headset -->
+  <a-plane hide-on-enter-ar rotation="-90 0 0" width="6" height="6" color="#2b2f36"></a-plane>
+  <a-sky hide-on-enter-ar color="#14171c"></a-sky>
+
+  <!-- Everything below is the market object that sits on the table -->
+  <a-entity id="market">
+
+    <!-- court floor -->
+    <a-box width="0.60" height="0.012" depth="0.32" color="#c9773f"></a-box>
+    <!-- court lines -->
+    <a-box position="0 0.007 0"       width="0.004" height="0.002" depth="0.30" color="#ffffff"></a-box>
+    <a-box position="0 0.007 0.15"    width="0.58"  height="0.002" depth="0.004" color="#ffffff"></a-box>
+    <a-box position="0 0.007 -0.15"   width="0.58"  height="0.002" depth="0.004" color="#ffffff"></a-box>
+    <a-box position="0.29 0.007 0"    width="0.004" height="0.002" depth="0.30" color="#ffffff"></a-box>
+    <a-box position="-0.29 0.007 0"   width="0.004" height="0.002" depth="0.30" color="#ffffff"></a-box>
+    <a-ring position="0 0.008 0" rotation="-90 0 0" radius-inner="0.036" radius-outer="0.040" color="#ffffff"></a-ring>
+
+    <!-- hoop A (left) -->
+    <a-entity position="-0.285 0 0">
+      <a-cylinder position="0 0.05 0" radius="0.004" height="0.10" color="#444444"></a-cylinder>
+      <a-box id="boardA" position="0.006 0.105 0" width="0.004" height="0.04" depth="0.06" color="#ffffff"></a-box>
+      <a-torus position="0.03 0.09 0" rotation="90 0 0" radius="0.018" radius-tubular="0.002" color="#e8590c"></a-torus>
+    </a-entity>
+    <!-- hoop B (right) -->
+    <a-entity position="0.285 0 0">
+      <a-cylinder position="0 0.05 0" radius="0.004" height="0.10" color="#444444"></a-cylinder>
+      <a-box id="boardB" position="-0.006 0.105 0" width="0.004" height="0.04" depth="0.06" color="#ffffff"></a-box>
+      <a-torus position="-0.03 0.09 0" rotation="90 0 0" radius="0.018" radius-tubular="0.002" color="#e8590c"></a-torus>
+    </a-entity>
+
+    <!-- floating scoreboard -->
+    <a-entity position="0 0.30 -0.05">
+      <a-plane width="0.30" height="0.09" color="#111418" opacity="0.92"></a-plane>
+      <a-text id="scoreText" position="0 0.015 0.002" align="center" width="0.55" color="#ffffff" value=""></a-text>
+      <a-text id="clockText" position="0 -0.025 0.002" align="center" width="0.32" color="#9aa4af" value=""></a-text>
+    </a-entity>
+
+    <!-- team A odds panel -->
+    <a-entity position="-0.26 0.19 -0.05" rotation="0 20 0">
+      <a-box id="panelA" class="clickable" width="0.17" height="0.08" depth="0.008" color="#333333"></a-box>
+      <a-text id="textA" position="0 0 0.006" align="center" width="0.42" color="#ffffff" value=""></a-text>
+    </a-entity>
+    <!-- team B odds panel -->
+    <a-entity position="0.26 0.19 -0.05" rotation="0 -20 0">
+      <a-box id="panelB" class="clickable" width="0.17" height="0.08" depth="0.008" color="#333333"></a-box>
+      <a-text id="textB" position="0 0 0.006" align="center" width="0.42" color="#ffffff" value=""></a-text>
+    </a-entity>
+
+    <!-- status line that tells you what happened -->
+    <a-text id="status" position="0 0.06 0.19" rotation="-30 0 0" align="center" width="0.45" color="#ffffff"
+            value="Point at a team, then pull the trigger or pinch"></a-text>
+  </a-entity>
+</a-scene>
+
+<script>
+const S = SETTINGS;
+const $ = (id) => document.getElementById(id);
+
+function setup() {
+  // put the market where the settings say
+  const m = $("market");
+  m.setAttribute("position", `0 ${S.tableHeight} ${-S.distance}`);
+  m.setAttribute("scale", `${S.courtScale} ${S.courtScale} ${S.courtScale}`);
+
+  $("scoreText").setAttribute("value", S.scoreLine);
+  $("clockText").setAttribute("value", S.clockLine);
+  $("panelA").setAttribute("color", S.teamA.color);
+  $("panelB").setAttribute("color", S.teamB.color);
+  $("textA").setAttribute("value", `${S.teamA.name}\n${S.teamA.odds}%`);
+  $("textB").setAttribute("value", `${S.teamB.name}\n${S.teamB.odds}%`);
+
+  // on a computer screen, tilt the view down so you can see the table
+  const lc = $("cam").components["look-controls"];
+  if (lc && lc.pitchObject) lc.pitchObject.rotation.x = -0.6;
+
+  // what happens when a team panel is clicked
+  function pick(team, panelId, boardId, otherPanelId, otherBoardId, otherColor) {
+    $(panelId).setAttribute("scale", "1.15 1.15 1.15");
+    $(otherPanelId).setAttribute("scale", "1 1 1");
+    $(boardId).setAttribute("color", team.color);
+    $(otherBoardId).setAttribute("color", "#ffffff");
+    $("status").setAttribute("value", `Your pick: ${team.name} at ${team.odds}%\n(test only - nothing recorded yet)`);
+  }
+  $("panelA").addEventListener("click", () => pick(S.teamA, "panelA", "boardA", "panelB", "boardB"));
+  $("panelB").addEventListener("click", () => pick(S.teamB, "panelB", "boardB", "panelA", "boardA"));
+}
+
+const scene = document.querySelector("a-scene");
+if (scene.hasLoaded) setup(); else scene.addEventListener("loaded", setup);
+// hide the help box once you are inside the headset view
+scene.addEventListener("enter-vr", () => { $("note").style.display = "none"; });
+scene.addEventListener("exit-vr",  () => { $("note").style.display = "block"; });
+</script>
+</body>
+</html>
