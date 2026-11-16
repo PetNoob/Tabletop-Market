@@ -76,7 +76,7 @@ const SETTINGS = {
   startCategory: "Sports",   // the tab that is open first
   springStiffness: 230, // how quickly it follows your hand. Lower = looser and floatier
   springDamping:   27,  // how quickly a wobble dies out. Lower = more wobble
-  showHands: false,     // true = draw white dots and lines over your hands
+  handStyle: "glove",   // "glove" = see-through hand shape, "outline" = dots and lines, "none" = nothing drawn
   grabReach: 0.10,      // how close (meters) your pinch must be to a cash pile to grab it
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
@@ -234,7 +234,7 @@ AFRAME.registerComponent("xr-input", {
               H.pos.set([a.x, a.y, a.z, c.x, c.y, c.z], k * 6);
             });
             H.geo.attributes.position.needsUpdate = true;
-            H.group.visible = !!SETTINGS.showHands; hi++;
+            H.group.visible = SETTINGS.handStyle === "outline"; hi++;
             this.tips[src.handedness] = H.joints[9].clone();
             if (window.TM) window.TM.fingerAt(src.handedness, H.joints[9]);
             // pinch point = halfway between thumb tip and index tip
@@ -381,7 +381,7 @@ function press(b, e) {
 const phys = {
   target: new THREE.Vector3(), targetYaw: 0,
   pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, yawVel: 0,
-  tiltX: 0, tiltZ: 0, tiltVX: 0, tiltVZ: 0, last: 0, ready: false
+  tiltX: 0, tiltZ: 0, tiltVX: 0, tiltVZ: 0, last: 0, ready: false, acc: new THREE.Vector3()
 };
 const pv = new THREE.Vector3(), pv2 = new THREE.Vector3();
 // push in the base's own directions (x = right, y = up, z = toward you), in meters per second
@@ -395,6 +395,7 @@ function stepPhysics(now) {
   if (!phys.ready || !market) return;
   let dt = Math.min(0.05, (now - phys.last) / 1000); phys.last = now;
   if (!(dt > 0)) return;
+  const dtAll = dt, v0x = phys.vel.x, v0y = phys.vel.y, v0z = phys.vel.z;
   const K = S.springStiffness, D = S.springDamping, steps = Math.ceil(dt / 0.008);
   dt /= steps;
   for (let i = 0; i < steps; i++) {
@@ -411,6 +412,11 @@ function stepPhysics(now) {
     const wantX = clamp(-lz * 0.09, -0.05, 0.05), wantZ = clamp(lx * 0.09, -0.05, 0.05);
     phys.tiltVX += ((wantX - phys.tiltX) * 260 - phys.tiltVX * 27) * dt; phys.tiltX += phys.tiltVX * dt;
     phys.tiltVZ += ((wantZ - phys.tiltZ) * 260 - phys.tiltVZ * 27) * dt; phys.tiltZ += phys.tiltVZ * dt;
+  }
+  { // acceleration in the base's own directions; the cash feels this as a push the other way
+    const ax = (phys.vel.x - v0x) / dtAll, ay = (phys.vel.y - v0y) / dtAll, az = (phys.vel.z - v0z) / dtAll;
+    const c = Math.cos(phys.yaw), s = Math.sin(phys.yaw);
+    phys.acc.set(clamp(ax * c - az * s, -8, 8), clamp(ay, -8, 8), clamp(ax * s + az * c, -8, 8));
   }
   market.object3D.position.copy(phys.pos);
   market.object3D.rotation.set(clamp(phys.tiltX, -0.07, 0.07), phys.yaw, clamp(phys.tiltZ, -0.07, 0.07));
@@ -442,75 +448,155 @@ function brushAt(hand, tip, now) {
   prev.p.copy(tip); prev.t = now;
 }
 
-/* ---------- the cash pile: shows what your pick is worth right now ---------- */
+/* ---------- the cash mound: shows what your pick is worth right now ----------
+   One small bundle = a fixed number of dollars, so the size of the mound IS the value of the pick.
+   Every bundle is its own object on a spring: it drops in, bounces, sloshes when the base moves,
+   and scoots away from a poking finger. */
+const MAXB = 170, BILL = { w: 0.017, h: 0.0045, d: 0.0095 };
+const UNITS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50, 100, 500];
+const unitFor = (stake) => UNITS.find((u) => stake / u <= 60) || 1000;      // dollars per bundle
+const scaleFor = (unit) => clamp(0.8 * Math.cbrt(unit / 0.1), 0.8, 2.4);     // bigger bundles for bigger money
+const rnd = (a, b) => { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); };
+const LAYOUTS = {};
+// where each of n bundles sits: a cone, filled layer by layer from the bottom (so a higher number = higher up)
+function layout(n) {
+  if (LAYOUTS[n]) return LAYOUTS[n];
+  const out = [], f = Math.cbrt(n / MAXB), R = Math.max(0.011, 0.052 * f), layers = Math.max(1, Math.round(13 * f));
+  const sx = BILL.w * 1.1, sz = BILL.d * 1.18;
+  for (let L = 0; out.length < n && L < 80; L++) {
+    const rl = R * Math.pow(Math.max(0.12, 1 - L / (layers + 0.5)), 0.9), cells = [], y = BILL.h * (L + 0.5) * 1.04;
+    const nx = Math.ceil(rl / sx) + 1, nz = Math.ceil(rl / sz) + 1;
+    for (let i = -nx; i <= nx; i++) for (let j = -nz; j <= nz; j++) {
+      const x = (i + (j & 1 ? 0.5 : 0) + (L & 1 ? 0.25 : 0)) * sx, z = (j + (L & 1 ? 0.5 : 0)) * sz;
+      if (x * x + z * z <= rl * rl) cells.push({ x: x + (rnd(i + L * 7, j) - 0.5) * 0.003, y, z: z + (rnd(j, i + L * 3) - 0.5) * 0.003, r: x * x + z * z });
+    }
+    if (!cells.length) cells.push({ x: 0, y, z: 0, r: 0 });
+    cells.sort((p, q) => p.r - q.r);
+    for (const c of cells) { if (out.length >= n) break; out.push(c); }
+  }
+  out.R = R; out.H = n ? out[out.length - 1].y + BILL.h / 2 : 0;
+  return (LAYOUTS[n] = out);
+}
 function makePile(parent, x, z) {
   const holder = mk("a-entity", { position: `${x} 0.005 ${z}` }, parent);
   const group = new THREE.Group(); holder.object3D.add(group);
-  const bw = 0.026, bh = 0.011, bd = 0.014;
-  const geo = new THREE.BoxGeometry(bw, bh, bd);
-  const mats = [new THREE.MeshStandardMaterial({ color: 0x2fbf71, roughness: 0.75 }),
-                new THREE.MeshStandardMaterial({ color: 0x25a05d, roughness: 0.75 }),
-                new THREE.MeshStandardMaterial({ color: 0x3bd184, roughness: 0.75 })];
-  const slots = [];
-  [[4, 3], [4, 3], [3, 3], [3, 2], [3, 2], [2, 2], [2, 2], [2, 1], [1, 1], [1, 1]].forEach((dim, L) => {
-    for (let i = 0; i < dim[0]; i++) for (let j = 0; j < dim[1]; j++) {
-      const sx = (i - (dim[0] - 1) / 2) * bw * 1.08, sz = (j - (dim[1] - 1) / 2) * bd * 1.18;
-      slots.push({ x: sx, y: bh * (L + 0.5), z: sz, r: (((i * 7 + j * 13 + L * 5) % 9) - 4) * 0.035,
-                   key: L + Math.hypot(sx, sz) * 22 });
-    }
-  });
-  slots.sort((p, q) => p.key - q.key);
+  const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(BILL.w, BILL.h, BILL.d),
+                                       new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 }), MAXB + 80);
+  inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage); inst.frustumCulled = false; inst.count = 0; group.add(inst);
+  const BASE = [0x27a862, 0x1e8a50, 0x31bb70].map((c) => new THREE.Color(c));
+  const LIT = [0xa6ffd2, 0x8ff5c2, 0xbdffdf].map((c) => new THREE.Color(c));
   const text = label(holder, "", 0, 0.085, 0, 0.0085, C.text);
-  // an invisible box around the pile so a mouse or controller can press it
+  // an invisible box around the mound so a mouse or controller can press it
   const proxy = mk("a-box", { position: "0 0.04 0", width: 0.12, height: 0.09, depth: 0.08,
                               material: "opacity: 0; transparent: true; depthWrite: false" }, holder);
-  const active = [], leaving = [];
-  let queue = 0;
-  return {
-    max: slots.length, holder, group, proxy, scale: 1, labelY: 0.085, off: new THREE.Vector3(),
-    setScale: function (s) { this.scale = s; if (grab.i < 0 || PILES[grab.i] !== this) group.scale.setScalar(s); },
-    setLabel: function (v, y) { text.setAttribute("value", v); if (y) this.labelY = y; this.place(); },
-    // off = how far the pile has been carried from its spot
-    place: function () { group.position.copy(this.off); text.object3D.position.set(this.off.x, this.labelY + this.off.y, this.off.z); },
-    glow: (on) => mats.forEach((m) => m.emissive.set(on ? 0x1f8f55 : 0x000000)),
-    clear: function () {
-      active.concat(leaving).forEach((m) => group.remove(m));
-      active.length = 0; leaving.length = 0; queue = 0;
-    },
-    setTarget: function (n, now) {
-      n = clamp(n, 0, slots.length);
-      queue = Math.max(queue, now);
-      while (active.length < n) {
-        const s = slots[active.length];
-        const m = new THREE.Mesh(geo, mats[active.length % 3]);
-        m.rotation.y = s.r; m.visible = false;
-        m.userData = { s, t0: queue }; queue += 45;
-        group.add(m); active.push(m);
+  const bills = [], flying = [];
+  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), SC = new THREE.Vector3();
+  const T = new THREE.Vector3(), lp = new THREE.Vector3(), hand = new THREE.Vector3();
+  let serial = 0, lastT = 0, awake = true, queue = 0;
+  const reach = () => S.grabReach / (pile.scale * S.courtScale);          // the grab distance, in the mound's own units
+  const pile = {
+    holder, group, proxy, scale: 1, heldFrac: 0, lit: 0,
+    count: () => bills.length,
+    heldCount: () => (pile.heldFrac > 0 && bills.length ? clamp(Math.round(pile.heldFrac * bills.length), 1, bills.length) : 0),
+    moundCount: () => bills.length - pile.heldCount(),
+    setScale: (s) => { if (s !== pile.scale) { pile.scale = s; group.scale.setScalar(s); awake = true; } },
+    setLabel: (v) => text.setAttribute("value", v),
+    setLit: (k) => { if (k !== pile.lit) { pile.lit = k; awake = true; } },       // light up the top k bundles
+    clear: () => { bills.length = 0; flying.length = 0; pile.heldFrac = 0; pile.lit = 0; inst.count = 0; awake = true; },
+    // make the mound n bundles: new ones drop in from above, extra ones pop off the top
+    setCount: function (n, now) {
+      n = clamp(Math.round(n), 0, MAXB);
+      if (n === bills.length) return;
+      awake = true; queue = Math.max(queue, now);
+      while (bills.length < n) {
+        const i = serial++;
+        bills.push({ p: new THREE.Vector3((rnd(i, 1) - 0.5) * 0.05, 0.14 + rnd(i, 2) * 0.08, (rnd(i, 3) - 0.5) * 0.05), v: new THREE.Vector3(),
+                     yaw: (rnd(i, 4) - 0.5) * 1.4, tx: (rnd(i, 5) - 0.5) * 0.24, tz: (rnd(i, 6) - 0.5) * 0.24, c: i % 3, k: 0, t0: queue });
+        queue += 14;
       }
-      while (active.length > n) {
-        const m = active.pop();
-        m.userData.t0 = queue; queue += 35;
-        leaving.push(m);
+      while (bills.length > n) { const b = bills.pop(); flying.push({ from: b.p, to: b.p, t: 0, c: b.c, yaw: b.yaw, pop: true }); }
+    },
+    // how many bundles would a pinch at this spot take? 0 = too far away. Low on the mound = all of it, higher = just the top.
+    hoverK: function (worldPoint) {
+      const nM = pile.moundCount();
+      if (!nM) return 0;
+      const lay = layout(nM), r = reach();
+      group.worldToLocal(lp.copy(worldPoint));
+      if (Math.hypot(lp.x, lp.z) > lay.R + r * 0.7 || lp.y > lay.H + r || lp.y < -r * 0.5) return 0;
+      if (lp.y <= lay.H * 0.3) return nM;
+      let k = 0;
+      for (let i = nM - 1; i >= 0 && lay[i].y >= lp.y - BILL.h; i--) k++;
+      return clamp(k, 1, nM);
+    },
+    hold: function (k, worldPoint) { pile.heldFrac = clamp(k, 1, bills.length) / bills.length; group.worldToLocal(hand.copy(worldPoint)); awake = true; },
+    moveHand: (worldPoint) => { group.worldToLocal(hand.copy(worldPoint)); awake = true; },
+    // let go: either the held bundles fly to a place (cash out) or they simply fall back onto the mound
+    release: function (flyTo) {
+      const nM = pile.moundCount();
+      if (flyTo) {
+        const to = group.worldToLocal(flyTo.clone());
+        for (let i = nM; i < bills.length; i++) flying.push({ from: bills[i].p, to, t: -(i - nM) * 0.01, c: bills[i].c, yaw: bills[i].yaw });
+        bills.length = nM;
+      }
+      pile.heldFrac = 0; awake = true;
+    },
+    // a fingertip pushes nearby bundles away
+    poke: function (worldPoint) {
+      if (!bills.length) return;
+      const lay = layout(pile.moundCount()), r = 0.022 / (pile.scale * S.courtScale);
+      group.worldToLocal(lp.copy(worldPoint));
+      if (Math.hypot(lp.x, lp.z) > lay.R + r || lp.y > lay.H + r || lp.y < -r) return;
+      for (const b of bills) {
+        const d = b.p.distanceTo(lp);
+        if (d >= r) continue;
+        T.copy(b.p).sub(lp); if (T.lengthSq() < 1e-10) T.set(0, 1, 0);
+        b.v.addScaledVector(T.normalize(), 0.012 / (pile.scale * S.courtScale) * (1 - d / r) * 60 * 0.016);
+        awake = true;
       }
     },
     update: function (now) {
-      for (const m of active) {
-        const u = m.userData; if (u.landed) continue;
-        const k = (now - u.t0) / 380;
-        if (k < 0) continue;
-        m.visible = true;
-        const e = k >= 1 ? 1 : 1 - Math.pow(1 - k, 3);
-        m.position.set(u.s.x, u.s.y + 0.24 * (1 - e), u.s.z);
-        if (k >= 1) { u.landed = true; shove(0, -0.012, 0, 0); }      // each bundle lands with a tiny thud
+      const dt = Math.min(0.033, (now - lastT) / 1000); lastT = now;
+      if (phys.acc.lengthSq() > 0.05 && bills.length) awake = true;
+      if (!awake || !(dt > 0)) return;
+      const s = pile.scale, nM = pile.moundCount(), nH = bills.length - nM, lay = layout(nM), layH = layout(nH);
+      let busy = flying.length > 0 || nH > 0;
+      for (let i = 0; i < bills.length; i++) {
+        const b = bills[i], held = i >= nM;
+        if (now < b.t0) { busy = true; SC.setScalar(0.0001); M.compose(b.p, Q.identity(), SC); inst.setMatrixAt(i, M); continue; }
+        if (!held) T.set(lay[i].x, lay[i].y, lay[i].z);
+        else { const c = layH[i - nM]; T.set(hand.x + c.x * 0.85, hand.y + (c.y - layH.H) * 0.85 - 0.006, hand.z + c.z * 0.85); }
+        const K = held ? 260 : 150, D = held ? 22 : 13;
+        b.v.x += ((T.x - b.p.x) * K - b.v.x * D - phys.acc.x * 0.7 / s) * dt;
+        b.v.y += ((T.y - b.p.y) * K - b.v.y * D - phys.acc.y * 0.7 / s) * dt;
+        b.v.z += ((T.z - b.p.z) * K - b.v.z * D - phys.acc.z * 0.7 / s) * dt;
+        b.p.addScaledVector(b.v, dt);
+        if (!held && b.p.y < BILL.h / 2) { b.p.y = BILL.h / 2; if (b.v.y < 0) b.v.y *= -0.3; }      // the table is solid
+        if (b.v.lengthSq() > 1e-6 || b.p.distanceToSquared(T) > 1e-8 || b.k < 1) busy = true;
+        b.k = Math.min(1, b.k + dt * 10);
+        E.set(b.tx + clamp(b.v.z * 1.5, -0.6, 0.6), b.yaw, b.tz - clamp(b.v.x * 1.5, -0.6, 0.6));
+        SC.setScalar(b.k); M.compose(b.p, Q.setFromEuler(E), SC); inst.setMatrixAt(i, M);
+        inst.setColorAt(i, held || i >= nM - pile.lit ? LIT[b.c] : BASE[b.c]);
       }
-      for (let i = leaving.length - 1; i >= 0; i--) {
-        const m = leaving[i], k = (now - m.userData.t0) / 230;
-        if (k < 0) continue;
-        if (k >= 1) { group.remove(m); leaving.splice(i, 1); continue; }
-        m.scale.setScalar(k < 0.35 ? 1 + 0.6 * (k / 0.35) : 1.6 * (1 - (k - 0.35) / 0.65));
+      for (let j = flying.length - 1; j >= 0; j--) {
+        const fl = flying[j]; fl.t += dt;
+        if (fl.t >= (fl.pop ? 0.2 : 0.42)) flying.splice(j, 1);
       }
+      flying.forEach((fl, j) => {
+        const k = clamp(fl.t / (fl.pop ? 0.2 : 0.42), 0, 1), e = 1 - Math.pow(1 - k, 3);
+        T.lerpVectors(fl.from, fl.to, e); if (!fl.pop) T.y += Math.sin(Math.PI * k) * 0.05 / s;
+        E.set(0, fl.yaw + k * 3, 0); SC.setScalar(fl.pop ? 1 - k : 1 - 0.7 * e);
+        M.compose(T, Q.setFromEuler(E), SC); inst.setMatrixAt(bills.length + j, M);
+        inst.setColorAt(bills.length + j, LIT[fl.c]);
+      });
+      inst.count = bills.length + flying.length;
+      inst.instanceMatrix.needsUpdate = true; if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      // the label floats above the mound, or above your hand while you carry cash
+      if (nH) text.object3D.position.set(hand.x * s, hand.y * s + 0.05, hand.z * s);
+      else text.object3D.position.set(0, lay.H * s + 0.032, 0);
+      awake = busy;
     }
   };
+  return pile;
 }
 
 /* ---------- the price graph ---------- */
@@ -611,6 +697,10 @@ function build() {
 
   buildLobby(market);
   buildMarket(market);
+
+  // glove-style hands: A-Frame's built-in hand model, drawn see-through over your real hands
+  if (S.handStyle === "glove") ["left", "right"].forEach((h) =>
+    mk("a-entity", { "hand-tracking-controls": `hand: ${h}; modelStyle: mesh; modelColor: #e9eef3; modelOpacity: 0.45` }, market.sceneEl));
 
   // computer screens: tilt the view down toward the table
   const lc = document.getElementById("cam").components["look-controls"];
@@ -851,7 +941,7 @@ function confirmPick() {
   const m = state.market, leg = legsOf(m)[state.sel], key = pickKey(m, leg);
   state.balance = Math.round((state.balance - amt) * 100) / 100;
   const cur = state.picks[key] || { stake: 0, shares: 0 };
-  state.picks[key] = { stake: cur.stake + amt, shares: cur.shares + amt / legPrice(leg) };
+  state.picks[key] = { stake: cur.stake + amt, shares: cur.shares + amt / legPrice(leg), unit: unitFor(cur.stake + amt) };
   closePanel();
 }
 
@@ -1130,12 +1220,11 @@ function refreshMarket() {
     UI.pills[i].name.setAttribute("value", trunc(leg.name, 17));
     UI.pills[i].pct.setAttribute("value", pct(p));
     if (pos) {
-      const value = pos.shares * p, change = value - pos.stake;
-      const size = clamp(Math.cbrt(pos.stake / 5), 0.75, 1.8);
-      const n = Math.max(1, Math.round(pile.max * 0.8 * p));
-      pile.setScale(size); pile.setTarget(n, now);
-      pile.setLabel(pileText(i, value, change), 0.04 + 0.12 * size * (n / pile.max));
-    } else { pile.setTarget(0, now); pile.setLabel(""); }
+      const value = pos.shares * p, change = value - pos.stake, unit = pos.unit || (pos.unit = unitFor(pos.stake));
+      pile.setScale(scaleFor(unit));
+      pile.setCount(Math.max(1, value / unit), now);      // one bundle = `unit` dollars, so the mound's size is the value
+      pile.setLabel(pileText(i, value, change));
+    } else { pile.setCount(0, now); pile.setLabel(""); }
   });
 }
 function refresh() {
@@ -1151,91 +1240,74 @@ function refresh() {
   PILES.forEach((p, i) => p.proxy.classList.toggle("clickable", !!pickAt(i) && state.sel === null));
 }
 
-/* ---------- cashing out: pinch the cash pile, carry it off the court, let go ----------
-   Fingers near a pile light it up and show what it is worth. Pinch to pick it up.
-   Let go over the court = it goes back, nothing happens. Let go anywhere else = cashed out into the balance.
-   A mouse or controller can also press the pile twice. Cash-out is local test money (not on a blockchain yet). */
-const grab = { i: -1, mode: "", t0: 0, from: new THREE.Vector3(), to: new THREE.Vector3(), over: true, value: 0 };
-const hover = { now: [false, false], shown: [false, false] }, armed = [0, 0];
+/* ---------- cashing out: pinch cash off the mound, carry it off the court, let go ----------
+   Fingers near the mound light up the part a pinch would take and show what it is worth:
+   low on the mound = all of it, higher up = only the top slice.
+   Pinch to lift that part. It is still your pick while you hold it, so it keeps growing and shrinking with the odds.
+   Let go over the court = it drops back, nothing happens. Let go anywhere else = that part is cashed out.
+   A mouse or controller can press the mound twice to cash out all of it.
+   Cash-out is local test money (not on a blockchain yet). */
+const grab = { i: -1, over: true };
+const hover = { k: [0, 0], shown: [0, 0] }, armed = [0, 0];
 const gv = new THREE.Vector3(), gv2 = new THREE.Vector3();
 function pickAt(i) {
   if (!inMarket()) return null;
   const leg = legsOf(state.market)[i], key = pickKey(state.market, leg), pos = state.picks[key];
   return pos ? { key, pos, value: pos.shares * legPrice(leg) } : null;
 }
-const pileCenter = (i) => PILES[i].holder.object3D.localToWorld(gv.set(0, 0.035, 0));
-// which pile (0 or 1) is close to a pinch point, or under a controller's pointer line; -1 = none
-function nearPile(point, ray) {
-  let best = -1, bestD = Infinity;
-  for (let i = 0; i < 2; i++) {
-    if (!pickAt(i)) continue;
-    const c = pileCenter(i), d = point ? point.distanceTo(c) : ray.ray.distanceToPoint(c);
-    if (d < (point ? S.grabReach : 0.06) && d < bestD) { best = i; bestD = d; }
-  }
-  return best;
+const pileCenter = (i) => PILES[i].holder.object3D.localToWorld(gv.set(0, 0.03, 0));
+// how many bundles a pinch here (or a controller pointing here) would take from mound i
+function hoverFor(i, point, ray) {
+  if (!pickAt(i)) return 0;
+  if (point) return PILES[i].hoverK(point);
+  return ray.ray.distanceToPoint(pileCenter(i)) < 0.07 ? PILES[i].moundCount() : 0;
 }
 function pileText(i, value, change) {
-  if (grab.i === i) return grab.mode !== "held" ? "" : grab.over ? "Let go here to keep it" : "Let go to cash out " + money(grab.value);
+  const pile = PILES[i], n = pile.count() || 1;
+  if (grab.i === i) return grab.over ? "Let go here to put it back" : "Let go to cash out " + money(value * pile.heldCount() / n);
   if (performance.now() < armed[i]) return "Press again to cash out " + money(value);
-  if (hover.shown[i]) return "Pinch to cash out " + money(value);
+  if (hover.shown[i] > 0) { const f = hover.shown[i] / n; return "Pinch to take " + money(value * f) + (f < 0.995 ? `  (${pct(f)})` : "  (all)"); }
   return `${money(value)}  (${change >= 0 ? "+" : "-"}${money(Math.abs(change))})`;
 }
-function grabBegin(i) {
+function grabBegin(i, frac, point) {
   stopSim();                                   // cash out at the real price, never a simulated one
-  const p = pickAt(i);
-  if (!p) return false;
-  grab.i = i; grab.mode = "held"; grab.over = true; grab.value = Math.round(p.value * 100) / 100;
-  PILES[i].glow(true); UI.wallet.setColor(C.walletOn);
+  const pile = PILES[i];
+  if (!pickAt(i) || !pile.count()) return false;
+  grab.i = i; grab.over = true;
+  pile.setLit(0); pile.hold(Math.round(frac * pile.count()), point || pileCenter(i).clone());
+  UI.wallet.setColor(C.walletOn);
   state.lockUntil = Infinity;                  // fingertips press nothing while you carry cash
   return true;
 }
-function grabFinish(cashOut) {
-  const pile = PILES[grab.i];
-  grab.mode = cashOut ? "fly" : "return"; grab.t0 = performance.now();
-  grab.from.copy(pile.off);
-  if (cashOut) pile.holder.object3D.worldToLocal(UI.walletAt.object3D.getWorldPosition(grab.to)); else grab.to.set(0, 0, 0);
-  refresh();
+function grabDone(cashOut) {
+  const i = grab.i, pile = PILES[i], p = pickAt(i);
+  if (cashOut && p) {
+    const frac = pile.heldCount() / Math.max(1, pile.count());
+    state.balance = Math.round((state.balance + p.value * frac) * 100) / 100;
+    if (frac > 0.995) delete state.picks[p.key];
+    else { p.pos.shares *= 1 - frac; p.pos.stake *= 1 - frac; }               // the rest of the pick stays on the table
+    pile.release(UI.walletAt.object3D.getWorldPosition(gv));
+    UI.balance.setAttribute("color", C.green);
+    setTimeout(() => UI.balance.setAttribute("color", C.text), 900);
+  } else pile.release(null);
+  grab.i = -1;
+  UI.wallet.setColor(C.panel); lockFingers(); refresh();
 }
-function grabReset() {
-  if (grab.i < 0) return;
-  const pile = PILES[grab.i];
-  pile.off.set(0, 0, 0); pile.place(); pile.group.scale.setScalar(pile.scale); pile.glow(false);
-  grab.i = -1; grab.mode = "";
-  UI.wallet.setColor(C.panel); lockFingers();
-}
-function stepGrab(now) {
-  // highlight follows the fingers
+function grabReset() { if (grab.i >= 0) grabDone(false); }
+function stepGrab() {
+  // the lit-up part follows the fingers
   let changed = false;
-  for (let i = 0; i < 2; i++) if (hover.now[i] !== hover.shown[i]) {
-    hover.shown[i] = hover.now[i]; changed = true;
-    if (grab.i !== i) PILES[i].glow(hover.now[i]);
+  for (let i = 0; i < 2; i++) if (hover.k[i] !== hover.shown[i]) {
+    hover.shown[i] = hover.k[i]; changed = true;
+    if (grab.i !== i) PILES[i].setLit(hover.k[i]);
   }
   if (changed && inMarket()) refresh();
-  if (grab.i < 0 || grab.mode === "held") return;
-  const pile = PILES[grab.i], fly = grab.mode === "fly";
-  const k = clamp((now - grab.t0) / (fly ? 420 : 220), 0, 1), e = 1 - Math.pow(1 - k, 3);
-  pile.off.lerpVectors(grab.from, grab.to, e);
-  if (fly) { pile.off.y += Math.sin(Math.PI * k) * 0.05; pile.group.scale.setScalar(pile.scale * (1 - 0.65 * e)); }
-  pile.place();
-  if (k < 1) return;
-  if (fly) {
-    const p = pickAt(grab.i);
-    if (p) {
-      state.balance = Math.round((state.balance + grab.value) * 100) / 100;
-      delete state.picks[p.key];
-      UI.balance.setAttribute("color", C.green);
-      setTimeout(() => UI.balance.setAttribute("color", C.text), 900);
-      shove(0, -0.03, 0, 0);
-    }
-    pile.clear();
-  }
-  grabReset(); refresh();
 }
-// mouse or controller trigger: press the pile once to arm, again within 3 seconds to cash out
+// mouse or controller trigger: press the mound once to arm, again within 3 seconds to cash out all of it
 function pileClicked(i) {
   if (!pickAt(i) || grab.i >= 0 || state.sel !== null) return;
   const now = performance.now();
-  if (now < armed[i]) { armed[i] = 0; if (grabBegin(i)) grabFinish(true); }
+  if (now < armed[i]) { armed[i] = 0; if (grabBegin(i, 1)) grabDone(true); }
   else { armed[i] = now + 3000; refresh(); setTimeout(refresh, 3100); }
 }
 
@@ -1245,33 +1317,38 @@ window.TM = {
   state, press, openMarket, backToLobby, phys, shove,
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepPhysics(now); stepGrab(now); PILES.forEach((p) => p.update(now)); },
-  // cash pile: highlight when fingers are near, pick up on pinch, carry, let go
-  hoverBegin: () => { hover.now[0] = hover.now[1] = false; },
-  hoverAt: (point, ray) => { if (grab.i < 0 && state.sel === null) { const i = nearPile(point, ray); if (i >= 0) hover.now[i] = true; } },
+  frame: (now) => { stepPhysics(now); stepGrab(); PILES.forEach((p) => p.update(now)); },
+  // cash mound: light up when fingers are near, lift on pinch, carry, let go
+  hoverBegin: () => { hover.k[0] = hover.k[1] = 0; },
+  hoverAt: (point, ray) => {
+    if (grab.i >= 0 || state.sel !== null || !inMarket()) return;
+    for (let i = 0; i < 2; i++) hover.k[i] = Math.max(hover.k[i], hoverFor(i, point, ray));
+  },
   grabStart: (point, ray) => {
-    if (grab.i >= 0 || state.sel !== null) return null;
-    const i = nearPile(point, ray);
-    if (i < 0 || !grabBegin(i)) return null;
+    if (grab.i >= 0 || state.sel !== null || !inMarket()) return null;
+    let i = -1, k = 0;
+    for (let j = 0; j < 2; j++) { const kj = hoverFor(j, point, ray); if (kj > k) { k = kj; i = j; } }
+    if (i < 0) return null;
+    if (!grabBegin(i, k / PILES[i].count(), point)) return null;
     refresh();
     return point ? 0 : ray.ray.origin.distanceTo(pileCenter(i));
   },
   grabMove: (p) => {
-    if (grab.i < 0 || grab.mode !== "held") return;
-    const pile = PILES[grab.i];
-    pile.holder.object3D.worldToLocal(pile.off.copy(p)); pile.off.y -= 0.03; pile.place();
+    if (grab.i < 0) return;
+    PILES[grab.i].moveHand(p);
     const lp = document.getElementById("market").object3D.worldToLocal(gv2.copy(p));
     const over = Math.abs(lp.x) < 0.33 && lp.z > -0.19 && lp.z < 0.21 && lp.y < 0.16;   // still above the court?
     if (over !== grab.over) { grab.over = over; refresh(); }
   },
-  grabEnd: () => { if (grab.i >= 0 && grab.mode === "held") grabFinish(!grab.over); },
-  grabCancel: () => { if (grab.i >= 0 && grab.mode === "held") grabFinish(false); },
+  grabEnd: () => { if (grab.i >= 0) grabDone(!grab.over); },
+  grabCancel: () => { if (grab.i >= 0) grabDone(false); },
   pileClicked,
   setHandle: (onNow) => UI.handle && UI.handle.setColor(onNow ? C.green : C.handle),
   // called every frame with the position of an index fingertip
   fingerAt: function (hand, tip) {
     const now = performance.now(), locked = now < state.lockUntil;
     brushAt(hand, tip, now);
+    if (grab.i < 0) PILES.forEach((p) => p.poke(tip));
     for (const b of BUTTONS) {
       if (!b.enabled()) { b.inside[hand] = false; continue; }
       const lp = b.el.object3D.worldToLocal(vTmp.copy(tip));

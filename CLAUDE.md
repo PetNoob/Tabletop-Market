@@ -78,6 +78,15 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Betting stays as it was (poke a pill, amount panel, Confirm). Brian chose NOT to add grab-a-stack betting.
 - Verified on desktop by calling the grab functions directly. NOT verified with real hands.
 
+## Cash mound and partial cash-out, late Nov 16 (replaces the simpler cash-out above)
+- Brian confirmed in the headset that the pile glow works. He then asked for the following, all built:
+- The cash is a mound of up to 170 small bundles (one InstancedMesh per side). One bundle = a fixed dollar amount (`unitFor(stake)`, stored on the pick as `unit`), so the mound size is the pick value. Bigger units draw bigger bundles (`scaleFor`).
+- Each bundle is on its own spring: drops in, bounces on the table, sloshes when the base accelerates (`phys.acc`), and scoots away from a fingertip (`pile.poke`).
+- Partial cash-out: finger height on the mound decides how much a pinch takes (`pile.hoverK`): the bottom 30 percent of the height takes all, higher takes only the bundles above the fingers. The lit bundles and the label show the dollars and percent.
+- Held cash is still part of the pick: `heldFrac` of the bundles follow the hand and the count keeps tracking the odds. Letting go off the court pays that fraction into the balance and scales the pick stake and shares down. Letting go over the court puts it back.
+- Hands: `handStyle: "glove"` adds two A-Frame `hand-tracking-controls` entities (mesh style, 45 percent see-through). "outline" brings back the dots and lines, "none" hides hands.
+- Verified on desktop by calling the functions directly (selection by height, partial cash-out $9.50 of $25, held value following a price change, cancel). NOT verified in the headset: the glove model, bundle slosh and poke feel, and how easy the height selection is with real fingers.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
