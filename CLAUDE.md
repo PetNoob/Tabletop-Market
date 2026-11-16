@@ -70,6 +70,14 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Brian tested the redesign in the headset and said the progress is great. Fixed after his feedback: the board is moved back so it no longer hangs over the court (`BOARD_POS`), the spring is much stiffer (230 / 27) with far less lean, and the hand-brush zone is now only the real surfaces (2 cm around the base and the board) instead of a fat box of air.
 - Brian wants a clever way to cash out. Ideas were discussed, nothing is built; do not code it until he picks one.
 
+## Cash-out, built late Nov 16 (decided with Brian)
+- Cash-out = sell a pick early at its current value. Fingers near the cash pile light it up and show "Pinch to cash out $X". Pinch to pick it up and carry it. Let go over the court = cancel (it returns). Let go anywhere else = cashed out: the pile flies into the balance card.
+- Backup for mouse or controller: press the pile twice within 3 seconds.
+- All-or-nothing per pick. A running simulation is stopped first, so cash-out always uses the real Gemini price. It is still local test money; it becomes the Arc payout call in step 3.
+- Hand outlines are hidden (`showHands: false` in SETTINGS) because Brian found them ugly. Hand tracking still runs.
+- Betting stays as it was (poke a pill, amount panel, Confirm). Brian chose NOT to add grab-a-stack betting.
+- Verified on desktop by calling the grab functions directly. NOT verified with real hands.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

@@ -76,6 +76,8 @@ const SETTINGS = {
   startCategory: "Sports",   // the tab that is open first
   springStiffness: 230, // how quickly it follows your hand. Lower = looser and floatier
   springDamping:   27,  // how quickly a wobble dies out. Lower = more wobble
+  showHands: false,     // true = draw white dots and lines over your hands
+  grabReach: 0.10,      // how close (meters) your pinch must be to a cash pile to grab it
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
   fallbackCategories: ["Sports", "Crypto", "Economics", "Commodities", "Politics", "Culture", "Weather", "Business", "Tech"],
@@ -120,7 +122,8 @@ AFRAME.registerComponent("xr-input", {
     this.tmp = new THREE.Vector3();
     this.tmp2 = new THREE.Vector3();
     this.drag = null;
-    this.justDragged = false;
+    this.carry = null;          // a cash pile being carried
+    this.pinch = {}; this.pinchSeen = {};
     this.tips = {};
     // pointer lines for controllers
     this.lines = [0, 1].map(() => {
@@ -167,7 +170,7 @@ AFRAME.registerComponent("xr-input", {
     return true;
   },
   onSelect: function (e) {
-    if (this.justDragged) { this.justDragged = false; return; }
+    if (this.drag || this.carry) return;      // letting go of something is not a press
     if (!this.rayFrom(e.frame, e.inputSource)) return;
     const targets = Array.from(document.querySelectorAll(".clickable")).map((el) => el.object3D);
     const hits = this.ray.intersectObjects(targets, true);
@@ -192,20 +195,28 @@ AFRAME.registerComponent("xr-input", {
     if (grab) {
       this.drag = { src: e.inputSource, offset: (window.TM ? window.TM.phys.target : market.object3D.position).clone().sub(this.origin) };
       if (window.TM) window.TM.setHandle(true);
+    } else if (window.TM) {
+      // not the handle: maybe a cash pile. Hands grab at the pinch point, controllers along their pointer line.
+      const h = e.inputSource.hand ? e.inputSource.handedness : null;
+      const pt = h && this.pinchSeen[h] ? this.pinch[h] : null;
+      const dist = window.TM.grabStart(pt, pt ? null : this.ray);
+      if (dist !== null) this.carry = { src: e.inputSource, hand: h, usePinch: !!pt, dist: dist };
     }
   },
   onEnd: function (e) {
     if (this.drag && this.drag.src === e.inputSource) {
-      this.drag = null; this.justDragged = true;
+      this.drag = null;
       if (window.TM) window.TM.setHandle(false);
     }
+    if (this.carry && this.carry.src === e.inputSource) { this.carry = null; window.TM.grabEnd(); }
   },
   tick: function () {
     const sceneEl = this.el, xr = sceneEl.renderer && sceneEl.renderer.xr;
     const session = xr && xr.getSession && xr.getSession();
     const frame = sceneEl.frame, ref = xr && xr.getReferenceSpace && xr.getReferenceSpace();
     let li = 0, hi = 0;
-    this.tips = {};
+    this.tips = {}; this.pinchSeen = {};
+    if (window.TM) window.TM.hoverBegin();
     if (session && frame && ref) {
       for (const src of session.inputSources) {
         if (src.hand && hi < 2 && frame.getJointPose) {
@@ -223,13 +234,18 @@ AFRAME.registerComponent("xr-input", {
               H.pos.set([a.x, a.y, a.z, c.x, c.y, c.z], k * 6);
             });
             H.geo.attributes.position.needsUpdate = true;
-            H.group.visible = true; hi++;
+            H.group.visible = !!SETTINGS.showHands; hi++;
             this.tips[src.handedness] = H.joints[9].clone();
             if (window.TM) window.TM.fingerAt(src.handedness, H.joints[9]);
+            // pinch point = halfway between thumb tip and index tip
+            const pp = this.pinch[src.handedness] || (this.pinch[src.handedness] = new AFRAME.THREE.Vector3());
+            pp.copy(H.joints[4]).add(H.joints[9]).multiplyScalar(0.5); this.pinchSeen[src.handedness] = true;
+            if (window.TM) window.TM.hoverAt(pp, null);
           }
         } else if (!src.hand && li < 2 && src.targetRayMode === "tracked-pointer" && src.targetRaySpace) {
           const pose = frame.getPose(src.targetRaySpace, ref);
           if (pose) { this.lines[li].matrix.fromArray(pose.transform.matrix); this.lines[li].visible = true; li++; }
+          if (window.TM && this.rayFrom(frame, src)) window.TM.hoverAt(null, this.ray);
         }
       }
       if (this.drag && this.rayFrom(frame, this.drag.src)) {
@@ -238,6 +254,13 @@ AFRAME.registerComponent("xr-input", {
         sceneEl.camera.getWorldPosition(this.tmp2);
         window.TM.setTarget(this.tmp, Math.atan2(this.tmp2.x - this.tmp.x, this.tmp2.z - this.tmp.z));
       }
+    }
+    if (this.carry) {
+      let live = false;
+      if (session) for (const src of session.inputSources) if (src === this.carry.src) live = true;
+      if (!live) { this.carry = null; window.TM.grabCancel(); }                    // hand or controller was lost
+      else if (this.carry.usePinch) { if (this.pinchSeen[this.carry.hand]) window.TM.grabMove(this.pinch[this.carry.hand]); }
+      else if (this.rayFrom(frame, this.carry.src)) window.TM.grabMove(this.tmp.copy(this.origin).addScaledVector(this.dir, this.carry.dist));
     }
     for (; li < 2; li++) this.lines[li].visible = false;
     for (; hi < 2; hi++) this.hands[hi].group.visible = false;
@@ -267,7 +290,7 @@ AFRAME.registerComponent("xr-input", {
    ====================================================================== */
 const S = SETTINGS, THREE = AFRAME.THREE;
 const C = { base: "#15171a", court: "#202328", panel: "#1b1e22", key: "#2b2f36", keyOn: "#434a54", line: "#4d535d",
-            text: "#f2f4f7", dim: "#8d95a0", green: "#2fbf71", greenInk: "#06210f", red: "#e5484d", handle: "#5d646e" };
+            text: "#f2f4f7", dim: "#8d95a0", green: "#2fbf71", greenInk: "#06210f", red: "#e5484d", handle: "#5d646e", walletOn: "#1f5a3c" };
 const state = {
   balance: S.startBalance, sel: null, amount: 5, typed: "",
   view: "lobby", page: 0, lockUntil: 0,
@@ -438,12 +461,18 @@ function makePile(parent, x, z) {
   });
   slots.sort((p, q) => p.key - q.key);
   const text = label(holder, "", 0, 0.085, 0, 0.0085, C.text);
+  // an invisible box around the pile so a mouse or controller can press it
+  const proxy = mk("a-box", { position: "0 0.04 0", width: 0.12, height: 0.09, depth: 0.08,
+                              material: "opacity: 0; transparent: true; depthWrite: false" }, holder);
   const active = [], leaving = [];
   let queue = 0;
   return {
-    max: slots.length,
-    setScale: (s) => group.scale.setScalar(s),
-    setLabel: (v, y) => { text.setAttribute("value", v); if (y) text.object3D.position.y = y; },
+    max: slots.length, holder, group, proxy, scale: 1, labelY: 0.085, off: new THREE.Vector3(),
+    setScale: function (s) { this.scale = s; if (grab.i < 0 || PILES[grab.i] !== this) group.scale.setScalar(s); },
+    setLabel: function (v, y) { text.setAttribute("value", v); if (y) this.labelY = y; this.place(); },
+    // off = how far the pile has been carried from its spot
+    place: function () { group.position.copy(this.off); text.object3D.position.set(this.off.x, this.labelY + this.off.y, this.off.z); },
+    glow: (on) => mats.forEach((m) => m.emissive.set(on ? 0x1f8f55 : 0x000000)),
     clear: function () {
       active.concat(leaving).forEach((m) => group.remove(m));
       active.length = 0; leaving.length = 0; queue = 0;
@@ -570,7 +599,8 @@ function build() {
 
   // balance card (always there)
   const bal = mk("a-entity", { position: "-0.45 0.045 0.20", rotation: "-35 18 0" }, market);
-  slab(bal, 0.20, 0.09, 0.008, C.panel, { r: 0.018, opacity: SEE });
+  UI.walletAt = bal;
+  UI.wallet = slab(bal, 0.20, 0.09, 0.008, C.panel, { r: 0.018, opacity: SEE });
   label(bal, "Test balance", 0, 0.029, 0.006, 0.0062, C.dim);
   UI.balance = label(bal, "", 0, 0.003, 0.006, 0.017, C.text);
   UI.interest = label(bal, `Earning ${S.interestRate}% while idle (preview)`, 0, -0.027, 0.006, 0.0052, C.green);
@@ -679,6 +709,8 @@ function buildMarket(market) {
     UI["rim" + i] = mk("a-torus", { position: `${-dir * 0.027} 0.078 0`, rotation: "90 0 0", radius: 0.016,
                                      "radius-tubular": 0.0018, color: C.line }, hoop);
     PILES[i] = makePile(G, dir * 0.17, 0.04);
+    PILES[i].proxy.tmEnabled = () => !!pickAt(i) && state.sel === null;
+    PILES[i].proxy.addEventListener("click", () => pileClicked(i));
   });
 
   // the two pills on the front edge, facing you: press one to pick that side
@@ -749,6 +781,7 @@ function inkFor(hex) {
 // after the view changes, fingertips must leave and come back before they can press again
 function lockFingers() { state.lockUntil = performance.now() + 700; }
 function showLegs() {
+  grabReset();
   const m = state.market, legs = legsOf(m);
   legs.forEach((leg, i) => {
     UI.pills[i].el.setColor(leg.color);
@@ -769,6 +802,7 @@ function openMarket(m) {
   last.game = Date.now(); pollOptions(viewOptions(), m);
 }
 function backToLobby() {
+  grabReset();
   stopSim();
   state.sel = null; UI.panel.setAttribute("visible", false);
   state.view = "lobby";
@@ -1100,7 +1134,7 @@ function refreshMarket() {
       const size = clamp(Math.cbrt(pos.stake / 5), 0.75, 1.8);
       const n = Math.max(1, Math.round(pile.max * 0.8 * p));
       pile.setScale(size); pile.setTarget(n, now);
-      pile.setLabel(`${money(value)}  (${change >= 0 ? "+" : "-"}${money(Math.abs(change))})`, 0.04 + 0.12 * size * (n / pile.max));
+      pile.setLabel(pileText(i, value, change), 0.04 + 0.12 * size * (n / pile.max));
     } else { pile.setTarget(0, now); pile.setLabel(""); }
   });
 }
@@ -1114,6 +1148,95 @@ function refresh() {
   // hidden buttons must not catch mouse or pointer presses meant for what is behind them
   BUTTONS.forEach((b) => b.el.classList.toggle("clickable", !!b.enabled()));
   UI.track.classList.toggle("clickable", state.sel !== null);
+  PILES.forEach((p, i) => p.proxy.classList.toggle("clickable", !!pickAt(i) && state.sel === null));
+}
+
+/* ---------- cashing out: pinch the cash pile, carry it off the court, let go ----------
+   Fingers near a pile light it up and show what it is worth. Pinch to pick it up.
+   Let go over the court = it goes back, nothing happens. Let go anywhere else = cashed out into the balance.
+   A mouse or controller can also press the pile twice. Cash-out is local test money (not on a blockchain yet). */
+const grab = { i: -1, mode: "", t0: 0, from: new THREE.Vector3(), to: new THREE.Vector3(), over: true, value: 0 };
+const hover = { now: [false, false], shown: [false, false] }, armed = [0, 0];
+const gv = new THREE.Vector3(), gv2 = new THREE.Vector3();
+function pickAt(i) {
+  if (!inMarket()) return null;
+  const leg = legsOf(state.market)[i], key = pickKey(state.market, leg), pos = state.picks[key];
+  return pos ? { key, pos, value: pos.shares * legPrice(leg) } : null;
+}
+const pileCenter = (i) => PILES[i].holder.object3D.localToWorld(gv.set(0, 0.035, 0));
+// which pile (0 or 1) is close to a pinch point, or under a controller's pointer line; -1 = none
+function nearPile(point, ray) {
+  let best = -1, bestD = Infinity;
+  for (let i = 0; i < 2; i++) {
+    if (!pickAt(i)) continue;
+    const c = pileCenter(i), d = point ? point.distanceTo(c) : ray.ray.distanceToPoint(c);
+    if (d < (point ? S.grabReach : 0.06) && d < bestD) { best = i; bestD = d; }
+  }
+  return best;
+}
+function pileText(i, value, change) {
+  if (grab.i === i) return grab.mode !== "held" ? "" : grab.over ? "Let go here to keep it" : "Let go to cash out " + money(grab.value);
+  if (performance.now() < armed[i]) return "Press again to cash out " + money(value);
+  if (hover.shown[i]) return "Pinch to cash out " + money(value);
+  return `${money(value)}  (${change >= 0 ? "+" : "-"}${money(Math.abs(change))})`;
+}
+function grabBegin(i) {
+  stopSim();                                   // cash out at the real price, never a simulated one
+  const p = pickAt(i);
+  if (!p) return false;
+  grab.i = i; grab.mode = "held"; grab.over = true; grab.value = Math.round(p.value * 100) / 100;
+  PILES[i].glow(true); UI.wallet.setColor(C.walletOn);
+  state.lockUntil = Infinity;                  // fingertips press nothing while you carry cash
+  return true;
+}
+function grabFinish(cashOut) {
+  const pile = PILES[grab.i];
+  grab.mode = cashOut ? "fly" : "return"; grab.t0 = performance.now();
+  grab.from.copy(pile.off);
+  if (cashOut) pile.holder.object3D.worldToLocal(UI.walletAt.object3D.getWorldPosition(grab.to)); else grab.to.set(0, 0, 0);
+  refresh();
+}
+function grabReset() {
+  if (grab.i < 0) return;
+  const pile = PILES[grab.i];
+  pile.off.set(0, 0, 0); pile.place(); pile.group.scale.setScalar(pile.scale); pile.glow(false);
+  grab.i = -1; grab.mode = "";
+  UI.wallet.setColor(C.panel); lockFingers();
+}
+function stepGrab(now) {
+  // highlight follows the fingers
+  let changed = false;
+  for (let i = 0; i < 2; i++) if (hover.now[i] !== hover.shown[i]) {
+    hover.shown[i] = hover.now[i]; changed = true;
+    if (grab.i !== i) PILES[i].glow(hover.now[i]);
+  }
+  if (changed && inMarket()) refresh();
+  if (grab.i < 0 || grab.mode === "held") return;
+  const pile = PILES[grab.i], fly = grab.mode === "fly";
+  const k = clamp((now - grab.t0) / (fly ? 420 : 220), 0, 1), e = 1 - Math.pow(1 - k, 3);
+  pile.off.lerpVectors(grab.from, grab.to, e);
+  if (fly) { pile.off.y += Math.sin(Math.PI * k) * 0.05; pile.group.scale.setScalar(pile.scale * (1 - 0.65 * e)); }
+  pile.place();
+  if (k < 1) return;
+  if (fly) {
+    const p = pickAt(grab.i);
+    if (p) {
+      state.balance = Math.round((state.balance + grab.value) * 100) / 100;
+      delete state.picks[p.key];
+      UI.balance.setAttribute("color", C.green);
+      setTimeout(() => UI.balance.setAttribute("color", C.text), 900);
+      shove(0, -0.03, 0, 0);
+    }
+    pile.clear();
+  }
+  grabReset(); refresh();
+}
+// mouse or controller trigger: press the pile once to arm, again within 3 seconds to cash out
+function pileClicked(i) {
+  if (!pickAt(i) || grab.i >= 0 || state.sel !== null) return;
+  const now = performance.now();
+  if (now < armed[i]) { armed[i] = 0; if (grabBegin(i)) grabFinish(true); }
+  else { armed[i] = now + 3000; refresh(); setTimeout(refresh, 3100); }
 }
 
 /* ---------- hooks used by the headset input code ---------- */
@@ -1122,7 +1245,28 @@ window.TM = {
   state, press, openMarket, backToLobby, phys, shove,
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepPhysics(now); PILES.forEach((p) => p.update(now)); },
+  frame: (now) => { stepPhysics(now); stepGrab(now); PILES.forEach((p) => p.update(now)); },
+  // cash pile: highlight when fingers are near, pick up on pinch, carry, let go
+  hoverBegin: () => { hover.now[0] = hover.now[1] = false; },
+  hoverAt: (point, ray) => { if (grab.i < 0 && state.sel === null) { const i = nearPile(point, ray); if (i >= 0) hover.now[i] = true; } },
+  grabStart: (point, ray) => {
+    if (grab.i >= 0 || state.sel !== null) return null;
+    const i = nearPile(point, ray);
+    if (i < 0 || !grabBegin(i)) return null;
+    refresh();
+    return point ? 0 : ray.ray.origin.distanceTo(pileCenter(i));
+  },
+  grabMove: (p) => {
+    if (grab.i < 0 || grab.mode !== "held") return;
+    const pile = PILES[grab.i];
+    pile.holder.object3D.worldToLocal(pile.off.copy(p)); pile.off.y -= 0.03; pile.place();
+    const lp = document.getElementById("market").object3D.worldToLocal(gv2.copy(p));
+    const over = Math.abs(lp.x) < 0.33 && lp.z > -0.19 && lp.z < 0.21 && lp.y < 0.16;   // still above the court?
+    if (over !== grab.over) { grab.over = over; refresh(); }
+  },
+  grabEnd: () => { if (grab.i >= 0 && grab.mode === "held") grabFinish(!grab.over); },
+  grabCancel: () => { if (grab.i >= 0 && grab.mode === "held") grabFinish(false); },
+  pileClicked,
   setHandle: (onNow) => UI.handle && UI.handle.setColor(onNow ? C.green : C.handle),
   // called every frame with the position of an index fingertip
   fingerAt: function (hand, tip) {
