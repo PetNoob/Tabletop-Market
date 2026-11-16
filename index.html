@@ -74,9 +74,9 @@ const SETTINGS = {
   gameRefreshSec:  5,   // how often the market on the table re-checks its odds
   lobbyRefreshSec: 300, // how often a category's list of markets is downloaded again
   startCategory: "Sports",   // the tab that is open first
-  springStiffness: 110, // how quickly it follows your hand. Lower = looser and floatier
-  springDamping:   13,  // how quickly a wobble dies out. Lower = more wobble
-  brushStrength:   1.0, // how much a passing hand shoves it. 0 = hands do not move it
+  springStiffness: 230, // how quickly it follows your hand. Lower = looser and floatier
+  springDamping:   27,  // how quickly a wobble dies out. Lower = more wobble
+  brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
   fallbackCategories: ["Sports", "Crypto", "Economics", "Commodities", "Politics", "Culture", "Weather", "Business", "Tech"],
   // these sample games are only used if the page cannot reach Gemini. The numbers are made up.
@@ -329,6 +329,7 @@ function slab(parent, w, h, d, color, opt) {
   el.setColor = (c) => mat.color.set(c);
   return el;
 }
+const BOARD_POS = "0 0.25 -0.255";   // the upright board: its bottom edge sits at the back edge of the base
 const SEE = 0.86;   // how solid the big surfaces are (1 = fully solid)
 
 function button(parent, text, x, y, w, h, onPress, opt) {
@@ -349,7 +350,7 @@ function press(b, e) {
   b.last = now;
   b.el.object3D.position.z = b.z - 0.004;
   setTimeout(() => { b.el.object3D.position.z = b.z; }, 130);
-  shove(0, 0, -0.05, 0.5);                  // a press gives the whole thing a tiny push
+  shove(0, 0, -0.02, 0);                    // a press gives the whole thing a tiny push
   b.onPress(e);
 }
 
@@ -384,12 +385,12 @@ function stepPhysics(now) {
     // lean: the top lags behind when the base moves, then settles
     const c = Math.cos(phys.yaw), s = Math.sin(phys.yaw);
     const lx = phys.vel.x * c - phys.vel.z * s, lz = phys.vel.x * s + phys.vel.z * c;
-    const wantX = clamp(-lz * 0.22, -0.13, 0.13), wantZ = clamp(lx * 0.22, -0.13, 0.13);
-    phys.tiltVX += ((wantX - phys.tiltX) * 150 - phys.tiltVX * 11) * dt; phys.tiltX += phys.tiltVX * dt;
-    phys.tiltVZ += ((wantZ - phys.tiltZ) * 150 - phys.tiltVZ * 11) * dt; phys.tiltZ += phys.tiltVZ * dt;
+    const wantX = clamp(-lz * 0.09, -0.05, 0.05), wantZ = clamp(lx * 0.09, -0.05, 0.05);
+    phys.tiltVX += ((wantX - phys.tiltX) * 260 - phys.tiltVX * 27) * dt; phys.tiltX += phys.tiltVX * dt;
+    phys.tiltVZ += ((wantZ - phys.tiltZ) * 260 - phys.tiltVZ * 27) * dt; phys.tiltZ += phys.tiltVZ * dt;
   }
   market.object3D.position.copy(phys.pos);
-  market.object3D.rotation.set(clamp(phys.tiltX, -0.2, 0.2), phys.yaw, clamp(phys.tiltZ, -0.2, 0.2));
+  market.object3D.rotation.set(clamp(phys.tiltX, -0.07, 0.07), phys.yaw, clamp(phys.tiltZ, -0.07, 0.07));
 }
 // a hand moving through the base or the board shoves it a little (called every frame per fingertip)
 const brush = {};
@@ -398,18 +399,20 @@ function brushAt(hand, tip, now) {
   const prev = brush[hand] || (brush[hand] = { p: new THREE.Vector3(), t: 0 });
   const dt = (now - prev.t) / 1000;
   if (dt > 0 && dt < 0.1) {
+    // only the real surfaces count: the flat base (2 cm thick zone) and the board itself (2 cm either side)
     const lp = market.object3D.worldToLocal(pv2.copy(tip));
-    const onBase = Math.abs(lp.x) < 0.37 && lp.z > -0.23 && lp.z < 0.31 && lp.y > -0.03 && lp.y < 0.05;
-    const onBoard = Math.abs(lp.x) < 0.35 && lp.y >= 0.05 && lp.y < 0.47 && lp.z > -0.22 && lp.z < -0.02;
+    const onBase = Math.abs(lp.x) < 0.35 && lp.z > -0.21 && lp.z < 0.29 && lp.y > -0.02 && lp.y < 0.02;
+    const bp = UI.lobby.object3D.worldToLocal(pv2.copy(tip));
+    const onBoard = Math.abs(bp.x) < 0.33 && Math.abs(bp.y) < 0.21 && Math.abs(bp.z) < 0.02;
     if (onBase || onBoard) {
       pv.copy(tip).sub(prev.p).divideScalar(dt);                 // fingertip speed
       const sp = pv.length();
       if (sp > 0.08) {
         pv.multiplyScalar(Math.min(1.2, sp) / sp * S.brushStrength);
-        phys.vel.addScaledVector(pv, dt * 22);
-        const c = Math.cos(phys.yaw), s = Math.sin(phys.yaw), lift = onBoard ? 1.6 : 0.6;
-        phys.tiltVX += -(pv.x * s + pv.z * c) * lift * dt * 30;
-        phys.tiltVZ += (pv.x * c - pv.z * s) * lift * dt * 30;
+        phys.vel.addScaledVector(pv, dt * 6);
+        const c = Math.cos(phys.yaw), s = Math.sin(phys.yaw), lift = onBoard ? 0.5 : 0.2;
+        phys.tiltVX += -(pv.x * s + pv.z * c) * lift * dt * 12;
+        phys.tiltVZ += (pv.x * c - pv.z * s) * lift * dt * 12;
       }
     }
   }
@@ -590,7 +593,7 @@ function build() {
 
 /* ---------- lobby: category tabs and market cards ---------- */
 function buildLobby(market) {
-  const L = UI.lobby = mk("a-entity", { position: "0 0.25 -0.10", rotation: "-18 0 0" }, market);
+  const L = UI.lobby = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
   slab(L, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE });
   label(L, "Markets", -0.308, 0.185, 0.006, 0.0115, C.text, "left");
   UI.lStatus = label(L, "", 0.308, 0.185, 0.006, 0.0068, C.dim, "right");
@@ -645,7 +648,7 @@ function buildMarket(market) {
   const G = UI.game = mk("a-entity", { visible: false }, market);
 
   // board at the back: title, answers on the left, graph on the right
-  const B = mk("a-entity", { position: "0 0.25 -0.10", rotation: "-18 0 0" }, G);
+  const B = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, G);
   slab(B, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE });
   UI.title = label(B, "", -0.308, 0.195, 0.006, 0.0092, C.text, "left", 0.616, "top");
   UI.when = label(B, "", -0.308, 0.128, 0.006, 0.0066, C.dim, "left");
@@ -670,12 +673,12 @@ function buildMarket(market) {
   // hoops (basketball only) and one cash pile per side
   UI.hoops = mk("a-entity", { visible: false }, G);
   [-1, 1].forEach((dir, i) => {
-    const hoop = mk("a-entity", { position: `${dir * 0.285} 0 0.03` }, UI.hoops);
+    const hoop = mk("a-entity", { position: `${dir * 0.285} 0 0` }, UI.hoops);
     mk("a-cylinder", { position: "0 0.045 0", radius: 0.003, height: 0.085, color: C.line }, hoop);
     mk("a-box", { position: `${-dir * 0.006} 0.09 0`, width: 0.004, height: 0.034, depth: 0.05, color: C.key }, hoop);
     UI["rim" + i] = mk("a-torus", { position: `${-dir * 0.027} 0.078 0`, rotation: "90 0 0", radius: 0.016,
                                      "radius-tubular": 0.0018, color: C.line }, hoop);
-    PILES[i] = makePile(G, dir * 0.17, 0.09);
+    PILES[i] = makePile(G, dir * 0.17, 0.04);
   });
 
   // the two pills on the front edge, facing you: press one to pick that side

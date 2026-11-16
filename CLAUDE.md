@@ -66,6 +66,10 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Physics: `phys` is a spring. xr-input calls `TM.setTarget()` when dragging; `stepPhysics()` makes the base follow with overshoot and lean. `brushAt()` shoves it when a fingertip moves through the base or board. Tunable in SETTINGS: `springStiffness`, `springDamping`, `brushStrength`.
 - Verified on desktop only: tabs, cards, duel and list markets, pick, pile, simulate, graph with real history, spring overshoot. NOT verified: anything in the headset, including hand brush, pill presses by fingertip, and how the see-through surfaces look in passthrough.
 
+## Headset feedback, evening of Nov 16
+- Brian tested the redesign in the headset and said the progress is great. Fixed after his feedback: the board is moved back so it no longer hangs over the court (`BOARD_POS`), the spring is much stiffer (230 / 27) with far less lean, and the hand-brush zone is now only the real surfaces (2 cm around the base and the board) instead of a fat box of air.
+- Brian wants a clever way to cash out. Ideas were discussed, nothing is built; do not code it until he picks one.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
