@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tabletop Market</title>
+<script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+<style>
+  body { margin: 0; font-family: system-ui, sans-serif; background: #0f1114; }
+  #note { position: fixed; left: 12px; top: 12px; z-index: 10; background: rgba(20,22,26,.92);
+          color: #e9edf2; padding: 10px 14px; border-radius: 10px; font-size: 13px; max-width: 330px;
+          line-height: 1.45; border: 1px solid #2c3037; }
+  #note b { color: #2fbf71; }
+</style>
+</head>
+<body>
+
+<div id="note">
+  <b>Tabletop Market</b> &middot; version 2<br>
+  Computer: click a team, set an amount, press Confirm.<br>
+  Quest: press <b>AR</b> (bottom right). Then press buttons with your fingertip, or point and pinch,
+  or use a controller trigger. Pinch the small bar at the front to move the court.
+</div>
+
+<script>
+/* ======================================================================
+   SETTINGS - numbers you can change. Distances are in meters.
+   ====================================================================== */
+const SETTINGS = {
+  tableHeight:  0.75,   // height of your table from the floor (0.75 m is about 30 inches)
+  distance:     0.75,   // how far in front of you it first appears
+  courtScale:   1.0,    // 1.0 = court is 60 cm long. 1.5 = bigger, 0.7 = smaller
+  startBalance: 100,    // test balance in dollars
+  interestRate: 4.1,    // shown on the balance card (preview only)
+  gameTicker:   "",     // leave empty to pick tonight's closest NBA game automatically
+  // these sample numbers are only used if the page cannot reach Gemini
+  sample: {
+    title: "Brooklyn vs Memphis",
+    a: { name: "Brooklyn", price: 0.34, color: "#7F77DD" },
+    b: { name: "Memphis",  price: 0.66, color: "#1D9E75" }
+  }
+};
+const GEMINI_URL = "https://api.gemini.com/v1/prediction-markets/events?status=active&category=Sports&search=NBA&limit=30";
+</script>
+
+<script>
+/* ======================================================================
+   HEADSET INPUT
+   - controllers: a thin line shows where you point; trigger = press
+   - hands: an outline is drawn over each hand; touch a button with your
+     index fingertip, or point and pinch
+   - pinch (or trigger) on the front bar to drag the whole court
+   ====================================================================== */
+const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[8,9],[0,10],[10,11],[11,12],[12,13],[13,14],
+               [0,15],[15,16],[16,17],[17,18],[18,19],[0,20],[20,21],[21,22],[22,23],[23,24]];
+
+AFRAME.registerComponent("xr-input", {
+  init: function () {
+    const THREE = AFRAME.THREE, sceneEl = this.el, root = sceneEl.object3D;
+    this.ray = new THREE.Raycaster();
+    this.mat = new THREE.Matrix4();
+    this.origin = new THREE.Vector3();
+    this.dir = new THREE.Vector3();
+    this.tmp = new THREE.Vector3();
+    this.tmp2 = new THREE.Vector3();
+    this.drag = null;
+    this.justDragged = false;
+    this.tips = {};
+    // pointer lines for controllers
+    this.lines = [0, 1].map(() => {
+      const g = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -0.9)]);
+      const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0xcfd6de, transparent: true, opacity: 0.7 }));
+      l.matrixAutoUpdate = false; l.visible = false; l.frustumCulled = false; root.add(l);
+      return l;
+    });
+    // hand outlines: a dot on every joint and a line along every finger
+    const dotGeo = new THREE.SphereGeometry(0.0055, 10, 8);
+    const dotMat = new THREE.MeshBasicMaterial({ color: 0xf2f4f7 });
+    const tipMat = new THREE.MeshBasicMaterial({ color: 0x2fbf71 });
+    this.hands = [0, 1].map(() => {
+      const group = new THREE.Group(); group.visible = false; root.add(group);
+      const dots = [];
+      for (let i = 0; i < 25; i++) {
+        const m = new THREE.Mesh(dotGeo, i === 9 ? tipMat : dotMat);
+        m.frustumCulled = false; group.add(m); dots.push(m);
+      }
+      const pos = new Float32Array(BONES.length * 6);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+      const seg = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xf2f4f7 }));
+      seg.frustumCulled = false; group.add(seg);
+      return { group, dots, pos, geo: g, joints: Array.from({ length: 25 }, () => new THREE.Vector3()) };
+    });
+    sceneEl.addEventListener("enter-vr", () => {
+      const s = sceneEl.renderer.xr.getSession();
+      if (!s) return;
+      s.addEventListener("select", (e) => this.onSelect(e));
+      s.addEventListener("selectstart", (e) => this.onStart(e));
+      s.addEventListener("selectend", (e) => this.onEnd(e));
+    });
+  },
+  rayFrom: function (frame, src) {
+    const ref = this.el.renderer.xr.getReferenceSpace();
+    if (!ref || !src || !src.targetRaySpace) return false;
+    const pose = frame.getPose(src.targetRaySpace, ref);
+    if (!pose) return false;
+    this.mat.fromArray(pose.transform.matrix);
+    this.origin.setFromMatrixPosition(this.mat);
+    this.dir.set(0, 0, -1).transformDirection(this.mat);
+    this.ray.set(this.origin, this.dir);
+    return true;
+  },
+  onSelect: function (e) {
+    if (this.justDragged) { this.justDragged = false; return; }
+    if (!this.rayFrom(e.frame, e.inputSource)) return;
+    const targets = Array.from(document.querySelectorAll(".clickable")).map((el) => el.object3D);
+    const hits = this.ray.intersectObjects(targets, true);
+    for (const h of hits) {
+      let o = h.object;
+      while (o && !o.el) o = o.parent;
+      if (!o || !o.el) continue;
+      if (o.el.tmEnabled && !o.el.tmEnabled()) continue;
+      o.el.emit("click", { intersection: h });
+      return;
+    }
+  },
+  onStart: function (e) {
+    const handle = document.getElementById("handle"), market = document.getElementById("market");
+    if (!handle || !market || !this.rayFrom(e.frame, e.inputSource)) return;
+    let grab = this.ray.intersectObject(handle.object3D, true).length > 0;
+    const tip = this.tips[e.inputSource.handedness];
+    if (!grab && e.inputSource.hand && tip) {
+      handle.object3D.getWorldPosition(this.tmp);
+      grab = this.tmp.distanceTo(tip) < 0.12;
+    }
+    if (grab) {
+      this.drag = { src: e.inputSource, offset: market.object3D.position.clone().sub(this.origin) };
+      if (window.TM) window.TM.setHandle(true);
+    }
+  },
+  onEnd: function (e) {
+    if (this.drag && this.drag.src === e.inputSource) {
+      this.drag = null; this.justDragged = true;
+      if (window.TM) window.TM.setHandle(false);
+    }
+  },
+  tick: function () {
+    const sceneEl = this.el, xr = sceneEl.renderer && sceneEl.renderer.xr;
+    const session = xr && xr.getSession && xr.getSession();
+    const frame = sceneEl.frame, ref = xr && xr.getReferenceSpace && xr.getReferenceSpace();
+    let li = 0, hi = 0;
+    this.tips = {};
+    if (session && frame && ref) {
+      for (const src of session.inputSources) {
+        if (src.hand && hi < 2 && frame.getJointPose) {
+          const H = this.hands[hi]; let ok = true, i = 0;
+          for (const space of src.hand.values()) {
+            const jp = frame.getJointPose(space, ref);
+            if (!jp) { ok = false; break; }
+            const p = jp.transform.position;
+            H.joints[i].set(p.x, p.y, p.z); H.dots[i].position.copy(H.joints[i]);
+            i++; if (i >= 25) break;
+          }
+          if (ok && i === 25) {
+            BONES.forEach((b, k) => {
+              const a = H.joints[b[0]], c = H.joints[b[1]];
+              H.pos.set([a.x, a.y, a.z, c.x, c.y, c.z], k * 6);
+            });
+            H.geo.attributes.position.needsUpdate = true;
+            H.group.visible = true; hi++;
+            this.tips[src.handedness] = H.joints[9].clone();
+            if (window.TM) window.TM.fingerAt(src.handedness, H.joints[9]);
+          }
+        } else if (!src.hand && li < 2 && src.targetRayMode === "tracked-pointer" && src.targetRaySpace) {
+          const pose = frame.getPose(src.targetRaySpace, ref);
+          if (pose) { this.lines[li].matrix.fromArray(pose.transform.matrix); this.lines[li].visible = true; li++; }
+        }
+      }
+      if (this.drag && this.rayFrom(frame, this.drag.src)) {
+        const m = document.getElementById("market").object3D;
+        m.position.copy(this.origin).add(this.drag.offset);
+        sceneEl.camera.getWorldPosition(this.tmp2);
+        m.rotation.y = Math.atan2(this.tmp2.x - m.position.x, this.tmp2.z - m.position.z);
+      }
+    }
+    for (; li < 2; li++) this.lines[li].visible = false;
+    for (; hi < 2; hi++) this.hands[hi].group.visible = false;
+    if (window.TM) window.TM.frame(performance.now());
+  }
+});
+</script>
+
+<a-scene xr-mode-ui="XRMode: xr" renderer="alpha: true; antialias: true"
+         webxr="optionalFeatures: hand-tracking, bounded-floor"
+         cursor="rayOrigin: mouse" raycaster="objects: .clickable" xr-input>
+  <a-entity id="cam" camera look-controls wasd-controls position="0 1.6 0"></a-entity>
+  <a-entity light="type: ambient; intensity: 1.1"></a-entity>
+  <a-entity light="type: directional; intensity: 1.3" position="0.6 3 1.5"></a-entity>
+  <!-- backdrop for computer screens only; hidden in the headset -->
+  <a-plane hide-on-enter-ar rotation="-90 0 0" width="6" height="6" color="#3a3f47"></a-plane>
+  <a-sky hide-on-enter-ar color="#565c66"></a-sky>
+  <a-entity id="market"></a-entity>
+</a-scene>
+
+<script>
+/* ======================================================================
+   THE APP
+   ====================================================================== */
+const S = SETTINGS;
+const C = { base: "#15171a", court: "#202328", panel: "#1b1e22", key: "#2b2f36", line: "#4d535d",
+            text: "#f2f4f7", dim: "#8d95a0", green: "#2fbf71", greenInk: "#06210f", handle: "#5d646e" };
+const state = {
+  balance: S.startBalance, sel: null, amount: 5, typed: "",
+  title: S.sample.title, source: "sample", sim: false,
+  team: { a: Object.assign({}, S.sample.a), b: Object.assign({}, S.sample.b) },
+  pos: { a: null, b: null }
+};
+const BUTTONS = [], UI = {}, PILES = {};
+const money = (v) => "$" + v.toFixed(2);
+const pct = (p) => Math.round(p * 100) + "%";
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function mk(tag, attrs, parent) {
+  const el = document.createElement(tag);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  parent.appendChild(el);
+  return el;
+}
+// size = roughly the width of one letter, in meters
+function label(parent, value, x, y, z, size, color, align) {
+  return mk("a-text", { value: value, position: `${x} ${y} ${z}`, width: size * 40, color: color || C.text,
+                         align: align || "center", baseline: "center" }, parent);
+}
+function button(parent, text, x, y, w, h, onPress, opt) {
+  opt = opt || {};
+  const el = mk("a-box", { class: "clickable", position: `${x} ${y} 0.007`, width: w, height: h, depth: 0.01,
+                           color: opt.color || C.key }, parent);
+  const t = label(el, text, 0, 0, 0.0065, opt.size || 0.0085, opt.ink || C.text);
+  const b = { el, t, w, h, d: 0.01, onPress, enabled: opt.enabled || (() => true), inside: {}, last: 0, z: 0.007 };
+  el.tmEnabled = b.enabled;
+  el.addEventListener("click", (e) => press(b, e));
+  BUTTONS.push(b);
+  return b;
+}
+function press(b, e) {
+  const now = performance.now();
+  if (!b.enabled() || now - b.last < 350) return;
+  b.last = now;
+  b.el.object3D.position.z = b.z - 0.004;
+  setTimeout(() => { b.el.object3D.position.z = b.z; }, 130);
+  b.onPress(e);
+}
+
+/* ---------- the cash pile: shows what your pick is worth right now ---------- */
+function makePile(parent, x) {
+  const THREE = AFRAME.THREE;
+  const holder = mk("a-entity", { position: `${x} 0.005 0` }, parent);
+  const group = new THREE.Group(); holder.object3D.add(group);
+  const bw = 0.026, bh = 0.011, bd = 0.014;
+  const geo = new THREE.BoxGeometry(bw, bh, bd);
+  const mats = [new THREE.MeshStandardMaterial({ color: 0x2fbf71, roughness: 0.75 }),
+                new THREE.MeshStandardMaterial({ color: 0x25a05d, roughness: 0.75 }),
+                new THREE.MeshStandardMaterial({ color: 0x3bd184, roughness: 0.75 })];
+  const slots = [];
+  [[4, 3], [4, 3], [3, 3], [3, 2], [3, 2], [2, 2], [2, 2], [2, 1], [1, 1], [1, 1]].forEach((dim, L) => {
+    for (let i = 0; i < dim[0]; i++) for (let j = 0; j < dim[1]; j++) {
+      const sx = (i - (dim[0] - 1) / 2) * bw * 1.08, sz = (j - (dim[1] - 1) / 2) * bd * 1.18;
+      slots.push({ x: sx, y: bh * (L + 0.5), z: sz, r: (((i * 7 + j * 13 + L * 5) % 9) - 4) * 0.035,
+                   key: L + Math.hypot(sx, sz) * 22 });
+    }
+  });
+  slots.sort((p, q) => p.key - q.key);
+  const text = label(holder, "", 0, 0.085, 0, 0.0085, C.text);
+  const active = [], leaving = [];
+  let queue = 0;
+  return {
+    max: slots.length,
+    setScale: (s) => group.scale.setScalar(s),
+    setLabel: (v, y) => { text.setAttribute("value", v); if (y) text.object3D.position.y = y; },
+    setTarget: function (n, now) {
+      n = clamp(n, 0, slots.length);
+      queue = Math.max(queue, now);
+      while (active.length < n) {
+        const s = slots[active.length];
+        const m = new THREE.Mesh(geo, mats[active.length % 3]);
+        m.rotation.y = s.r; m.visible = false;
+        m.userData = { s, t0: queue }; queue += 45;
+        group.add(m); active.push(m);
+      }
+      while (active.length > n) {
+        const m = active.pop();
+        m.userData.t0 = queue; queue += 35; m.userData.done = false;
+        leaving.push(m);
+      }
+    },
+    count: () => active.length,
+    update: function (now) {
+      for (const m of active) {
+        const u = m.userData; if (u.landed) continue;
+        const k = (now - u.t0) / 380;
+        if (k < 0) continue;
+        m.visible = true;
+        const e = k >= 1 ? 1 : 1 - Math.pow(1 - k, 3);
+        m.position.set(u.s.x, u.s.y + 0.24 * (1 - e), u.s.z);
+        if (k >= 1) u.landed = true;
+      }
+      for (let i = leaving.length - 1; i >= 0; i--) {
+        const m = leaving[i], k = (now - m.userData.t0) / 230;
+        if (k < 0) continue;
+        if (k >= 1) { group.remove(m); leaving.splice(i, 1); continue; }
+        m.scale.setScalar(k < 0.35 ? 1 + 0.6 * (k / 0.35) : 1.6 * (1 - (k - 0.35) / 0.65));
+      }
+    }
+  };
+}
+
+/* ---------- build everything ---------- */
+function build() {
+  const market = document.getElementById("market");
+  market.setAttribute("position", `0 ${S.tableHeight} ${-S.distance}`);
+  market.setAttribute("scale", `${S.courtScale} ${S.courtScale} ${S.courtScale}`);
+
+  // slab and court
+  mk("a-box", { position: "0 -0.008 0", width: 0.68, height: 0.016, depth: 0.40, color: C.base }, market);
+  mk("a-box", { position: "0 0.002 0", width: 0.60, height: 0.004, depth: 0.32, color: C.court }, market);
+  [["0 0.0045 0", 0.003, 0.30], ["0.29 0.0045 0", 0.003, 0.30], ["-0.29 0.0045 0", 0.003, 0.30]].forEach((l) =>
+    mk("a-box", { position: l[0], width: l[1], height: 0.001, depth: l[2], color: C.line }, market));
+  [["0 0.0045 0.15"], ["0 0.0045 -0.15"]].forEach((l) =>
+    mk("a-box", { position: l[0], width: 0.583, height: 0.001, depth: 0.003, color: C.line }, market));
+  mk("a-ring", { position: "0 0.0052 0", rotation: "-90 0 0", "radius-inner": 0.037, "radius-outer": 0.040, color: C.line }, market);
+
+  // scoreboard
+  const sb = mk("a-entity", { position: "0 0.33 -0.06" }, market);
+  mk("a-box", { width: 0.36, height: 0.075, depth: 0.008, color: C.panel }, sb);
+  UI.title = label(sb, "", 0, 0.012, 0.006, 0.0115, C.text);
+  UI.status = label(sb, "", 0, -0.018, 0.006, 0.0062, C.dim);
+
+  // one hoop, one team panel and one cash pile per side
+  [["a", -1], ["b", 1]].forEach(([side, dir]) => {
+    const hoop = mk("a-entity", { position: `${dir * 0.285} 0 0` }, market);
+    mk("a-cylinder", { position: "0 0.052 0", radius: 0.0035, height: 0.10, color: C.line }, hoop);
+    mk("a-box", { position: `${-dir * 0.006} 0.108 0`, width: 0.004, height: 0.04, depth: 0.06, color: C.key }, hoop);
+    UI["rim" + side] = mk("a-torus", { position: `${-dir * 0.03} 0.093 0`, rotation: "90 0 0", radius: 0.018,
+                                        "radius-tubular": 0.002, color: state.team[side].color }, hoop);
+    const holder = mk("a-entity", { position: `${dir * 0.27} 0.21 -0.06`, rotation: `0 ${-dir * 22} 0` }, market);
+    const b = button(holder, "", 0, 0, 0.19, 0.095, () => openPanel(side), { color: C.panel });
+    b.z = 0; b.el.object3D.position.z = 0; b.d = 0.014; b.el.setAttribute("depth", 0.014);
+    UI["stripe" + side] = mk("a-box", { position: "0 -0.0445 0.0005", width: 0.19, height: 0.006, depth: 0.0145,
+                                         color: state.team[side].color }, b.el);
+    UI["name" + side] = label(b.el, "", 0, 0.026, 0.0085, 0.0088, C.dim);
+    UI["odds" + side] = label(b.el, "", 0, -0.008, 0.0085, 0.021, C.text);
+    UI["side" + side] = b;
+    PILES[side] = makePile(market, dir * 0.185);
+  });
+
+  // balance card
+  const bal = mk("a-entity", { position: "-0.42 0.045 0.20", rotation: "-35 18 0" }, market);
+  mk("a-box", { width: 0.20, height: 0.09, depth: 0.008, color: C.panel }, bal);
+  label(bal, "Test balance", 0, 0.029, 0.006, 0.0062, C.dim);
+  UI.balance = label(bal, "", 0, 0.003, 0.006, 0.017, C.text);
+  UI.interest = label(bal, `Earning ${S.interestRate}% while idle (preview)`, 0, -0.027, 0.006, 0.0052, C.green);
+
+  // simulate button
+  const sim = mk("a-entity", { position: "0.42 0.045 0.20", rotation: "-35 -18 0" }, market);
+  UI.simBtn = button(sim, "Simulate odds", 0, 0, 0.18, 0.05, toggleSim, { color: C.panel, size: 0.0085 });
+
+  // handle to move the court
+  UI.handle = mk("a-box", { id: "handle", class: "clickable", position: "0 -0.004 0.215", width: 0.15, height: 0.012,
+                            depth: 0.018, color: C.handle }, market);
+
+  // amount panel (hidden until you press a team)
+  const p = mk("a-entity", { position: "0 0.135 0.31", rotation: "-35 0 0", visible: false }, market);
+  UI.panel = p;
+  mk("a-box", { width: 0.54, height: 0.235, depth: 0.008, color: C.panel }, p);
+  const on = { enabled: () => state.sel !== null };
+  UI.pTitle = label(p, "", -0.09, 0.09, 0.006, 0.0095, C.dim);
+  UI.pAmount = label(p, "", -0.09, 0.052, 0.006, 0.024, C.text);
+  UI.pWin = label(p, "", -0.09, 0.02, 0.006, 0.0078, C.green);
+  // slider
+  UI.track = mk("a-box", { class: "clickable", position: "-0.09 -0.012 0.007", width: 0.29, height: 0.02, depth: 0.008, color: C.key }, p);
+  UI.track.tmEnabled = on.enabled;
+  UI.knob = mk("a-box", { position: "0 0 0.006", width: 0.012, height: 0.03, depth: 0.008, color: C.text }, UI.track);
+  UI.track.addEventListener("click", (e) => {
+    if (!on.enabled() || !e.detail || !e.detail.intersection) return;
+    const lp = UI.track.object3D.worldToLocal(e.detail.intersection.point.clone());
+    setAmount(sliderValue(lp.x));
+  });
+  // quick amounts
+  [["+$1", 1], ["+$5", 5], ["+$25", 25]].forEach((q, i) =>
+    button(p, q[0], -0.199 + i * 0.073, -0.052, 0.066, 0.034, () => setAmount(state.amount + q[1]), on));
+  button(p, "Clear", 0.02, -0.052, 0.066, 0.034, () => setAmount(0), on);
+  button(p, "Cancel", -0.185, -0.094, 0.094, 0.036, closePanel, on);
+  button(p, "Confirm", -0.045, -0.094, 0.17, 0.036, confirm, { enabled: on.enabled, color: C.green, ink: C.greenInk, size: 0.0095 });
+  // number pad
+  [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], [".", "0", "<"]].forEach((row, r) =>
+    row.forEach((k, c) => button(p, k, 0.118 + c * 0.047, 0.07 - r * 0.042, 0.043, 0.038, () => typeKey(k), on)));
+
+  // computer screens: tilt the view down toward the table
+  const lc = document.getElementById("cam").components["look-controls"];
+  if (lc && lc.pitchObject) lc.pitchObject.rotation.x = -0.62;
+
+  refresh();
+  loadGemini();
+  setInterval(() => { if (!state.sim) loadGemini(); }, 20000);
+}
+
+/* ---------- amount entry ---------- */
+const sliderMax = () => Math.max(1, Math.min(state.balance, 100));
+const sliderValue = (x) => Math.round(clamp(x / 0.29 + 0.5, 0, 1) * sliderMax());
+function setAmount(v, keepTyped) {
+  state.amount = Math.round(clamp(v, 0, state.balance) * 100) / 100;
+  if (!keepTyped) state.typed = "";
+  refreshPanel();
+}
+function typeKey(k) {
+  let t = state.typed;
+  if (k === "<") t = t.slice(0, -1);
+  else if (k === ".") { if (!t.includes(".")) t = (t || "0") + "."; }
+  else if (!(t.includes(".") && t.split(".")[1].length >= 2) && t.length < 7) t += k;
+  state.typed = t;
+  setAmount(parseFloat(t) || 0, true);
+}
+function openPanel(side) {
+  state.sel = side; state.typed = "";
+  if (state.amount <= 0 || state.amount > state.balance) state.amount = Math.min(5, state.balance);
+  UI.panel.setAttribute("visible", true);
+  refresh();
+}
+function closePanel() { state.sel = null; UI.panel.setAttribute("visible", false); refresh(); }
+function confirm() {
+  const side = state.sel, amt = state.amount, price = state.team[side].price;
+  if (!side || amt <= 0 || amt > state.balance + 1e-9) return;
+  state.balance = Math.round((state.balance - amt) * 100) / 100;
+  const cur = state.pos[side] || { stake: 0, shares: 0 };
+  state.pos[side] = { stake: cur.stake + amt, shares: cur.shares + amt / price };
+  closePanel();
+}
+
+/* ---------- odds ---------- */
+function priceOf(c) {
+  const p = (c && c.prices) || {}, n = (v) => { const f = parseFloat(v); return isFinite(f) && f > 0 ? f : null; };
+  const bid = n(p.bestBid), ask = n(p.bestAsk), last = n(p.lastTradePrice), buy = n(p.buy && p.buy.yes);
+  if (bid !== null && ask !== null) return (bid + ask) / 2;
+  return last !== null ? last : (buy !== null ? buy : (bid !== null ? bid : ask));
+}
+async function loadGemini() {
+  try {
+    const r = await fetch(GEMINI_URL, { cache: "no-store" });
+    if (!r.ok) throw new Error("bad response");
+    const j = await r.json();
+    const list = Array.isArray(j) ? j : (j.data || j.events || j.results || []);
+    let games = list.filter((e) => e && /-M$/.test(e.ticker || "") && (e.contracts || []).length === 2 &&
+                                   e.contracts.every((c) => priceOf(c) !== null));
+    if (S.gameTicker) games = games.filter((e) => e.ticker === S.gameTicker);
+    if (!games.length) throw new Error("no game found");
+    games.sort((x, y) => Math.abs(priceOf(x.contracts[0]) - 0.5) - Math.abs(priceOf(y.contracts[0]) - 0.5));
+    const ev = games[0];
+    if (state.sim) return;
+    state.title = ev.title || state.title;
+    ["a", "b"].forEach((side, i) => {
+      state.team[side].name = ev.contracts[i].label || state.team[side].name;
+      state.team[side].price = clamp(priceOf(ev.contracts[i]), 0.01, 0.99);
+    });
+    state.source = "live";
+  } catch (err) {
+    if (state.source !== "live") state.source = "sample";
+  }
+  refresh();
+}
+let simTimer = null, simSaved = null;
+function toggleSim() {
+  if (state.sim) return stopSim();
+  state.sim = true;
+  simSaved = { a: state.team.a.price, b: state.team.b.price };
+  let ticks = 0;
+  simTimer = setInterval(() => {
+    const step = (Math.random() * 0.07 + 0.03) * (Math.random() < 0.5 ? -1 : 1);
+    state.team.a.price = clamp(state.team.a.price + step, 0.06, 0.94);
+    state.team.b.price = 1 - state.team.a.price;
+    refresh();
+    if (++ticks >= 16) stopSim();
+  }, 1300);
+  refresh();
+}
+function stopSim() {
+  clearInterval(simTimer); state.sim = false;
+  if (simSaved) { state.team.a.price = simSaved.a; state.team.b.price = simSaved.b; }
+  refresh(); loadGemini();
+}
+
+/* ---------- drawing the current state ---------- */
+function refreshPanel() {
+  if (!state.sel) return;
+  const t = state.team[state.sel];
+  UI.pTitle.setAttribute("value", `${t.name}  ${pct(t.price)}`);
+  UI.pAmount.setAttribute("value", state.typed !== "" ? "$" + state.typed : money(state.amount));
+  UI.pWin.setAttribute("value", state.amount > 0 ? `Risk ${money(state.amount)} to win ${money(state.amount / t.price)}`
+                                                 : "Choose an amount");
+  UI.knob.object3D.position.x = (clamp(state.amount / sliderMax(), 0, 1) - 0.5) * 0.29;
+}
+function refresh() {
+  if (!UI.title) return;
+  const now = performance.now();
+  UI.title.setAttribute("value", state.title);
+  UI.status.setAttribute("value", state.sim ? "Simulated odds (demo)" :
+    (state.source === "live" ? "Live odds from Gemini" : "Sample odds - could not reach Gemini from this page"));
+  UI.simBtn.t.setAttribute("value", state.sim ? "Stop simulation" : "Simulate odds");
+  UI.balance.setAttribute("value", money(state.balance));
+  ["a", "b"].forEach((side) => {
+    const t = state.team[side], pos = state.pos[side], pile = PILES[side];
+    UI["name" + side].setAttribute("value", t.name);
+    UI["odds" + side].setAttribute("value", pct(t.price));
+    UI["side" + side].el.setAttribute("color", state.sel === side ? C.key : C.panel);
+    if (pos) {
+      const value = pos.shares * t.price, change = value - pos.stake;
+      const size = clamp(Math.cbrt(pos.stake / 5), 0.75, 1.8);
+      const n = Math.max(1, Math.round(pile.max * 0.8 * t.price));
+      pile.setScale(size);
+      pile.setTarget(n, now);
+      pile.setLabel(`${money(value)}  (${change >= 0 ? "+" : "-"}${money(Math.abs(change))})`,
+                    0.04 + 0.12 * size * (n / pile.max));
+    } else { pile.setTarget(0, now); pile.setLabel(""); }
+  });
+  refreshPanel();
+}
+
+/* ---------- hooks used by the headset input code ---------- */
+const vTmp = new AFRAME.THREE.Vector3();
+window.TM = {
+  state, press,
+  frame: (now) => { PILES.a && PILES.a.update(now); PILES.b && PILES.b.update(now); },
+  setHandle: (onNow) => UI.handle && UI.handle.setAttribute("color", onNow ? C.green : C.handle),
+  // called every frame with the position of an index fingertip
+  fingerAt: function (hand, tip) {
+    for (const b of BUTTONS) {
+      if (!b.enabled()) { b.inside[hand] = false; continue; }
+      const lp = b.el.object3D.worldToLocal(vTmp.copy(tip));
+      const inside = Math.abs(lp.x) < b.w / 2 && Math.abs(lp.y) < b.h / 2 && lp.z > -0.02 && lp.z < b.d / 2 + 0.012;
+      if (inside && !b.inside[hand]) press(b);
+      b.inside[hand] = inside;
+    }
+    if (state.sel && UI.track) {
+      const lp = UI.track.object3D.worldToLocal(vTmp.copy(tip));
+      if (Math.abs(lp.x) < 0.16 && Math.abs(lp.y) < 0.018 && lp.z > -0.015 && lp.z < 0.02) setAmount(sliderValue(lp.x));
+    }
+  }
+};
+
+const scene = document.querySelector("a-scene");
+if (scene.hasLoaded) build(); else scene.addEventListener("loaded", build);
+scene.addEventListener("enter-vr", () => { document.getElementById("note").style.display = "none"; });
+scene.addEventListener("exit-vr", () => { document.getElementById("note").style.display = "block"; });
+</script>
+</body>
+</html>
