@@ -87,6 +87,13 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Hands: `handStyle: "glove"` adds two A-Frame `hand-tracking-controls` entities (mesh style, 45 percent see-through). "outline" brings back the dots and lines, "none" hides hands.
 - Verified on desktop by calling the functions directly (selection by height, partial cash-out $9.50 of $25, held value following a price change, cancel). NOT verified in the headset: the glove model, bundle slosh and poke feel, and how easy the height selection is with real fingers.
 
+## Cash heap v2, 1-100 percent cash-out, glove v2 (night of Nov 16)
+- Brian feedback on the first mound: it looked like stacks in a small circle, the percent jumped (2 to 30), the simulation stopped when he lifted cash, and the first glove showed white speckles between overlapping fingers. He sent a photo of the Quest system hand (dark see-through with a light edge) as the target look.
+- Heap: a solid lathe core (`CORE_GEO`, swells with value) covered by up to 170 instanced banknotes lying on its surface (`layout(n)`, numbered bottom to top). Notes have a canvas-drawn generic green note texture. Per-note springs, slosh and poke are kept.
+- Cash-out amount: `pile.hoverFrac` maps hand height above the table to 1 to 100 percent over `cashRange` (0.16 m), smoothed in `stepGrab`. The percent showing at the pinch is what is taken (`heldFrac`, exact, not rounded to notes).
+- Simulation no longer stops on a grab and does not end while cash is held. Amounts during a simulation are labeled "(simulated)" and DO pay into the test balance. When Arc is added, a cash-out during a simulation must not call the contract.
+- Glove: `styleGlove()` replaces the A-Frame hand material with a two-step draw (shape first, then only the nearest surface, dark with a bright rim). Verified on desktop by loading the hand model by hand; NOT verified with live hand tracking.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

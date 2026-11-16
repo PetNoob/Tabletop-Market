@@ -77,7 +77,8 @@ const SETTINGS = {
   springStiffness: 230, // how quickly it follows your hand. Lower = looser and floatier
   springDamping:   27,  // how quickly a wobble dies out. Lower = more wobble
   handStyle: "glove",   // "glove" = see-through hand shape, "outline" = dots and lines, "none" = nothing drawn
-  grabReach: 0.10,      // how close (meters) your pinch must be to a cash pile to grab it
+  grabReach: 0.10,      // how far out to the side of the cash heap (meters) a pinch still counts
+  cashRange: 0.16,      // hand height (meters) above the table where the cash-out amount reads 1%. At the table it reads 100%
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
   fallbackCategories: ["Sports", "Crypto", "Economics", "Commodities", "Politics", "Culture", "Weather", "Business", "Tech"],
@@ -448,52 +449,75 @@ function brushAt(hand, tip, now) {
   prev.p.copy(tip); prev.t = now;
 }
 
-/* ---------- the cash mound: shows what your pick is worth right now ----------
-   One small bundle = a fixed number of dollars, so the size of the mound IS the value of the pick.
-   Every bundle is its own object on a spring: it drops in, bounces, sloshes when the base moves,
-   and scoots away from a poking finger. */
-const MAXB = 170, BILL = { w: 0.017, h: 0.0045, d: 0.0095 };
+/* ---------- the cash heap: shows what your pick is worth right now ----------
+   A solid heap in the middle (so it is tall and full) covered with loose notes lying at every angle.
+   One note = a fixed number of dollars, so the size of the heap IS the value of the pick.
+   Every note is its own object on a spring: it drops in, bounces, sloshes when the base moves,
+   and scoots away from a poking finger. Notes are numbered from the bottom up, so "the top part" is the last ones. */
+const MAXB = 170, BILL = { w: 0.030, h: 0.0022, d: 0.0128 }, HEAP = { R: 0.058, H: 0.078 };
 const UNITS = [0.1, 0.25, 0.5, 1, 2, 5, 10, 25, 50, 100, 500];
-const unitFor = (stake) => UNITS.find((u) => stake / u <= 60) || 1000;      // dollars per bundle
-const scaleFor = (unit) => clamp(0.8 * Math.cbrt(unit / 0.1), 0.8, 2.4);     // bigger bundles for bigger money
+const unitFor = (stake) => UNITS.find((u) => stake / u <= 60) || 1000;      // dollars per note
+const scaleFor = (unit) => clamp(0.8 * Math.cbrt(unit / 0.1), 0.8, 1.8);      // bigger notes for bigger money, so volume follows value
 const rnd = (a, b) => { const x = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return x - Math.floor(x); };
 const LAYOUTS = {};
-// where each of n bundles sits: a cone, filled layer by layer from the bottom (so a higher number = higher up)
+// where each of n notes lies on the surface of the heap
 function layout(n) {
   if (LAYOUTS[n]) return LAYOUTS[n];
-  const out = [], f = Math.cbrt(n / MAXB), R = Math.max(0.011, 0.052 * f), layers = Math.max(1, Math.round(13 * f));
-  const sx = BILL.w * 1.1, sz = BILL.d * 1.18;
-  for (let L = 0; out.length < n && L < 80; L++) {
-    const rl = R * Math.pow(Math.max(0.12, 1 - L / (layers + 0.5)), 0.9), cells = [], y = BILL.h * (L + 0.5) * 1.04;
-    const nx = Math.ceil(rl / sx) + 1, nz = Math.ceil(rl / sz) + 1;
-    for (let i = -nx; i <= nx; i++) for (let j = -nz; j <= nz; j++) {
-      const x = (i + (j & 1 ? 0.5 : 0) + (L & 1 ? 0.25 : 0)) * sx, z = (j + (L & 1 ? 0.5 : 0)) * sz;
-      if (x * x + z * z <= rl * rl) cells.push({ x: x + (rnd(i + L * 7, j) - 0.5) * 0.003, y, z: z + (rnd(j, i + L * 3) - 0.5) * 0.003, r: x * x + z * z });
-    }
-    if (!cells.length) cells.push({ x: 0, y, z: 0, r: 0 });
-    cells.sort((p, q) => p.r - q.r);
-    for (const c of cells) { if (out.length >= n) break; out.push(c); }
+  const f = Math.max(0.2, Math.cbrt(n / MAXB)), R = HEAP.R * f, H = HEAP.H * f, slope = Math.atan2(H, R), out = [];
+  for (let i = 0; i < n; i++) {
+    const u = 1 - Math.sqrt(1 - (i + 0.5) / n);                                // 0 = at the table, 1 = the peak
+    const th = i * 2.39996 + rnd(i, 9) * 0.5, r = R * Math.pow(1 - u, 0.75) * (0.8 + 0.2 * rnd(i, 8));
+    const tilt = slope * 0.85 * Math.min(1, (1 - u) * 2.5);                    // notes lean against the slope, flat on top
+    out.push({ x: r * Math.cos(th), y: H * u + BILL.h + Math.sin(tilt) * BILL.w * 0.35, z: r * Math.sin(th), th, tilt });
   }
-  out.R = R; out.H = n ? out[out.length - 1].y + BILL.h / 2 : 0;
+  out.R = n ? R : 0; out.H = n ? H : 0; out.f = n ? f : 0;
   return (LAYOUTS[n] = out);
 }
+// a generic green banknote drawn in code (not a copy of any real note)
+function noteTexture() {
+  const cv = document.createElement("canvas"); cv.width = 256; cv.height = 110;
+  const g = cv.getContext("2d");
+  g.fillStyle = "#cfe9d6"; g.fillRect(0, 0, 256, 110);                         // pale paper edge
+  g.fillStyle = "#2f9e62"; g.fillRect(9, 9, 238, 92);
+  g.strokeStyle = "#1c6e42"; g.lineWidth = 3; g.strokeRect(16, 16, 224, 78);
+  g.fillStyle = "#1f7f4c"; g.fillRect(22, 22, 212, 66);
+  g.fillStyle = "#cfe9d6"; g.beginPath(); g.ellipse(128, 55, 30, 27, 0, 0, Math.PI * 2); g.fill();
+  g.fillStyle = "#1f7f4c"; g.font = "bold 40px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("$", 128, 58);
+  g.fillStyle = "#cfe9d6"; [[38, 36], [218, 36], [38, 74], [218, 74]].forEach((p) => { g.beginPath(); g.arc(p[0], p[1], 8, 0, Math.PI * 2); g.fill(); });
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  return tex;
+}
+let NOTE_MATS = null, CORE_GEO = null;
 function makePile(parent, x, z) {
+  if (!NOTE_MATS) {
+    const face = new THREE.MeshStandardMaterial({ map: noteTexture(), roughness: 0.85 });
+    const edge = new THREE.MeshStandardMaterial({ color: 0xbfdcc7, roughness: 0.9 });
+    NOTE_MATS = [edge, edge, face, face, edge, edge];                          // box sides, top, bottom, sides
+    const prof = [];
+    for (let k = 0; k <= 12; k++) { const u = k / 12; prof.push(new THREE.Vector2(HEAP.R * 0.8 * Math.pow(1 - u, 0.75), HEAP.H * 0.9 * u)); }
+    CORE_GEO = new THREE.LatheGeometry(prof, 22);
+  }
   const holder = mk("a-entity", { position: `${x} 0.005 ${z}` }, parent);
   const group = new THREE.Group(); holder.object3D.add(group);
-  const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(BILL.w, BILL.h, BILL.d),
-                                       new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7 }), MAXB + 80);
+  const inst = new THREE.InstancedMesh(new THREE.BoxGeometry(BILL.w, BILL.h, BILL.d), NOTE_MATS, MAXB + 80);
   inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage); inst.frustumCulled = false; inst.count = 0; group.add(inst);
-  const BASE = [0x27a862, 0x1e8a50, 0x31bb70].map((c) => new THREE.Color(c));
-  const LIT = [0xa6ffd2, 0x8ff5c2, 0xbdffdf].map((c) => new THREE.Color(c));
+  const coreMat = new THREE.MeshStandardMaterial({ color: 0x1a6b40, roughness: 0.95 });
+  const core = new THREE.Mesh(CORE_GEO, coreMat), core2 = new THREE.Mesh(CORE_GEO, coreMat);
+  core.scale.setScalar(0.0001); core2.visible = false; group.add(core); group.add(core2);
+  const BASE = [new THREE.Color(1, 1, 1), new THREE.Color(0.86, 0.93, 0.88), new THREE.Color(0.76, 0.88, 0.8)];
+  const LIT = [new THREE.Color(1.9, 2.1, 1.9), new THREE.Color(1.7, 1.95, 1.75), new THREE.Color(1.6, 1.9, 1.65)];   // above 1 = brighter than normal
   const text = label(holder, "", 0, 0.085, 0, 0.0085, C.text);
-  // an invisible box around the mound so a mouse or controller can press it
-  const proxy = mk("a-box", { position: "0 0.04 0", width: 0.12, height: 0.09, depth: 0.08,
+  // an invisible box around the heap so a mouse or controller can press it
+  const proxy = mk("a-box", { position: "0 0.045 0", width: 0.13, height: 0.1, depth: 0.11,
                               material: "opacity: 0; transparent: true; depthWrite: false" }, holder);
   const bills = [], flying = [];
-  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), SC = new THREE.Vector3();
+  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), Q2 = new THREE.Quaternion(), SC = new THREE.Vector3();
+  const AY = new THREE.Vector3(0, 1, 0), AZ = new THREE.Vector3(0, 0, 1);
   const T = new THREE.Vector3(), lp = new THREE.Vector3(), hand = new THREE.Vector3();
-  let serial = 0, lastT = 0, awake = true, queue = 0;
-  const reach = () => S.grabReach / (pile.scale * S.courtScale);          // the grab distance, in the mound's own units
+  let serial = 0, lastT = 0, awake = true, queue = 0, coreS = 0;
+  // note direction: turned to face outward, leaned against the slope, then spun on its own axis
+  const orient = (slot, b, wobble) => Q.setFromAxisAngle(AY, -slot.th).multiply(Q2.setFromAxisAngle(AZ, -(slot.tilt + b.tz + wobble)))
+                                       .multiply(Q2.setFromAxisAngle(AY, b.yaw));
   const pile = {
     holder, group, proxy, scale: 1, heldFrac: 0, lit: 0,
     count: () => bills.length,
@@ -501,56 +525,54 @@ function makePile(parent, x, z) {
     moundCount: () => bills.length - pile.heldCount(),
     setScale: (s) => { if (s !== pile.scale) { pile.scale = s; group.scale.setScalar(s); awake = true; } },
     setLabel: (v) => text.setAttribute("value", v),
-    setLit: (k) => { if (k !== pile.lit) { pile.lit = k; awake = true; } },       // light up the top k bundles
-    clear: () => { bills.length = 0; flying.length = 0; pile.heldFrac = 0; pile.lit = 0; inst.count = 0; awake = true; },
-    // make the mound n bundles: new ones drop in from above, extra ones pop off the top
+    setLit: (k) => { if (k !== pile.lit) { pile.lit = k; awake = true; } },       // light up the top k notes
+    clear: () => { bills.length = 0; flying.length = 0; pile.heldFrac = 0; pile.lit = 0; inst.count = 0; coreS = 0;
+                   core.scale.setScalar(0.0001); core2.visible = false; awake = true; },
+    // make the heap n notes: new ones drop in from above, extra ones pop off the top
     setCount: function (n, now) {
       n = clamp(Math.round(n), 0, MAXB);
       if (n === bills.length) return;
       awake = true; queue = Math.max(queue, now);
       while (bills.length < n) {
         const i = serial++;
-        bills.push({ p: new THREE.Vector3((rnd(i, 1) - 0.5) * 0.05, 0.14 + rnd(i, 2) * 0.08, (rnd(i, 3) - 0.5) * 0.05), v: new THREE.Vector3(),
-                     yaw: (rnd(i, 4) - 0.5) * 1.4, tx: (rnd(i, 5) - 0.5) * 0.24, tz: (rnd(i, 6) - 0.5) * 0.24, c: i % 3, k: 0, t0: queue });
-        queue += 14;
+        bills.push({ p: new THREE.Vector3((rnd(i, 1) - 0.5) * 0.06, 0.16 + rnd(i, 2) * 0.09, (rnd(i, 3) - 0.5) * 0.06), v: new THREE.Vector3(),
+                     yaw: (rnd(i, 4) - 0.5) * 3.1, tz: (rnd(i, 6) - 0.5) * 0.5, c: i % 3, k: 0, t0: queue });
+        queue += 12;
       }
       while (bills.length > n) { const b = bills.pop(); flying.push({ from: b.p, to: b.p, t: 0, c: b.c, yaw: b.yaw, pop: true }); }
     },
-    // how many bundles would a pinch at this spot take? 0 = too far away. Low on the mound = all of it, higher = just the top.
-    hoverK: function (worldPoint) {
-      const nM = pile.moundCount();
-      if (!nM) return 0;
-      const lay = layout(nM), r = reach();
-      group.worldToLocal(lp.copy(worldPoint));
-      if (Math.hypot(lp.x, lp.z) > lay.R + r * 0.7 || lp.y > lay.H + r || lp.y < -r * 0.5) return 0;
-      if (lp.y <= lay.H * 0.3) return nM;
-      let k = 0;
-      for (let i = nM - 1; i >= 0 && lay[i].y >= lp.y - BILL.h; i--) k++;
-      return clamp(k, 1, nM);
+    // how much would a pinch at this spot take? 0 = too far away, otherwise 0.01 to 1.
+    // It only depends on how high the hand is: at the table = all of it, cashRange above the table = 1%.
+    hoverFrac: function (worldPoint) {
+      if (!pile.moundCount()) return 0;
+      holder.object3D.worldToLocal(lp.copy(worldPoint));                       // height above the table, in table units
+      const far = layout(pile.moundCount()).R * pile.scale + S.grabReach * 0.7;
+      if (Math.hypot(lp.x, lp.z) > far || lp.y < -0.04 || lp.y > S.cashRange + 0.05) return 0;
+      return clamp(1 - (lp.y - 0.012) / (S.cashRange - 0.012), 0.01, 1);
     },
-    hold: function (k, worldPoint) { pile.heldFrac = clamp(k, 1, bills.length) / bills.length; group.worldToLocal(hand.copy(worldPoint)); awake = true; },
+    hold: function (frac, worldPoint) { pile.heldFrac = clamp(frac, 0.01, 1); group.worldToLocal(hand.copy(worldPoint)); awake = true; },
     moveHand: (worldPoint) => { group.worldToLocal(hand.copy(worldPoint)); awake = true; },
-    // let go: either the held bundles fly to a place (cash out) or they simply fall back onto the mound
+    // let go: either the held notes fly to a place (cash out) or they simply fall back onto the heap
     release: function (flyTo) {
       const nM = pile.moundCount();
       if (flyTo) {
         const to = group.worldToLocal(flyTo.clone());
-        for (let i = nM; i < bills.length; i++) flying.push({ from: bills[i].p, to, t: -(i - nM) * 0.01, c: bills[i].c, yaw: bills[i].yaw });
+        for (let i = nM; i < bills.length; i++) flying.push({ from: bills[i].p, to, t: -(i - nM) * 0.008, c: bills[i].c, yaw: bills[i].yaw });
         bills.length = nM;
       }
       pile.heldFrac = 0; awake = true;
     },
-    // a fingertip pushes nearby bundles away
+    // a fingertip pushes nearby notes away
     poke: function (worldPoint) {
       if (!bills.length) return;
-      const lay = layout(pile.moundCount()), r = 0.022 / (pile.scale * S.courtScale);
+      const lay = layout(pile.moundCount()), k = pile.scale * S.courtScale, r = 0.03 / k;
       group.worldToLocal(lp.copy(worldPoint));
       if (Math.hypot(lp.x, lp.z) > lay.R + r || lp.y > lay.H + r || lp.y < -r) return;
       for (const b of bills) {
         const d = b.p.distanceTo(lp);
         if (d >= r) continue;
         T.copy(b.p).sub(lp); if (T.lengthSq() < 1e-10) T.set(0, 1, 0);
-        b.v.addScaledVector(T.normalize(), 0.012 / (pile.scale * S.courtScale) * (1 - d / r) * 60 * 0.016);
+        b.v.addScaledVector(T.normalize(), 0.012 / k * (1 - d / r));
         awake = true;
       }
     },
@@ -561,20 +583,19 @@ function makePile(parent, x, z) {
       const s = pile.scale, nM = pile.moundCount(), nH = bills.length - nM, lay = layout(nM), layH = layout(nH);
       let busy = flying.length > 0 || nH > 0;
       for (let i = 0; i < bills.length; i++) {
-        const b = bills[i], held = i >= nM;
+        const b = bills[i], held = i >= nM, slot = held ? layH[i - nM] : lay[i];
         if (now < b.t0) { busy = true; SC.setScalar(0.0001); M.compose(b.p, Q.identity(), SC); inst.setMatrixAt(i, M); continue; }
-        if (!held) T.set(lay[i].x, lay[i].y, lay[i].z);
-        else { const c = layH[i - nM]; T.set(hand.x + c.x * 0.85, hand.y + (c.y - layH.H) * 0.85 - 0.006, hand.z + c.z * 0.85); }
+        if (!held) T.set(slot.x, slot.y, slot.z);
+        else T.set(hand.x + slot.x * 0.85, hand.y + (slot.y - layH.H) * 0.85 - 0.006, hand.z + slot.z * 0.85);
         const K = held ? 260 : 150, D = held ? 22 : 13;
         b.v.x += ((T.x - b.p.x) * K - b.v.x * D - phys.acc.x * 0.7 / s) * dt;
         b.v.y += ((T.y - b.p.y) * K - b.v.y * D - phys.acc.y * 0.7 / s) * dt;
         b.v.z += ((T.z - b.p.z) * K - b.v.z * D - phys.acc.z * 0.7 / s) * dt;
         b.p.addScaledVector(b.v, dt);
-        if (!held && b.p.y < BILL.h / 2) { b.p.y = BILL.h / 2; if (b.v.y < 0) b.v.y *= -0.3; }      // the table is solid
+        if (!held && b.p.y < BILL.h) { b.p.y = BILL.h; if (b.v.y < 0) b.v.y *= -0.3; }            // the table is solid
         if (b.v.lengthSq() > 1e-6 || b.p.distanceToSquared(T) > 1e-8 || b.k < 1) busy = true;
         b.k = Math.min(1, b.k + dt * 10);
-        E.set(b.tx + clamp(b.v.z * 1.5, -0.6, 0.6), b.yaw, b.tz - clamp(b.v.x * 1.5, -0.6, 0.6));
-        SC.setScalar(b.k); M.compose(b.p, Q.setFromEuler(E), SC); inst.setMatrixAt(i, M);
+        SC.setScalar(b.k); M.compose(b.p, orient(slot, b, clamp(b.v.y * 3, -0.6, 0.6)), SC); inst.setMatrixAt(i, M);
         inst.setColorAt(i, held || i >= nM - pile.lit ? LIT[b.c] : BASE[b.c]);
       }
       for (let j = flying.length - 1; j >= 0; j--) {
@@ -583,16 +604,22 @@ function makePile(parent, x, z) {
       }
       flying.forEach((fl, j) => {
         const k = clamp(fl.t / (fl.pop ? 0.2 : 0.42), 0, 1), e = 1 - Math.pow(1 - k, 3);
-        T.lerpVectors(fl.from, fl.to, e); if (!fl.pop) T.y += Math.sin(Math.PI * k) * 0.05 / s;
-        E.set(0, fl.yaw + k * 3, 0); SC.setScalar(fl.pop ? 1 - k : 1 - 0.7 * e);
-        M.compose(T, Q.setFromEuler(E), SC); inst.setMatrixAt(bills.length + j, M);
+        T.lerpVectors(fl.from, fl.to, e); if (!fl.pop) T.y += Math.sin(Math.PI * k) * 0.05 / s; else T.y += k * 0.02;
+        SC.setScalar(fl.pop ? 1 - k : 1 - 0.7 * e);
+        M.compose(T, Q.setFromAxisAngle(AY, fl.yaw + k * 3), SC); inst.setMatrixAt(bills.length + j, M);
         inst.setColorAt(bills.length + j, LIT[fl.c]);
       });
       inst.count = bills.length + flying.length;
       inst.instanceMatrix.needsUpdate = true; if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-      // the label floats above the mound, or above your hand while you carry cash
+      // the solid middle swells and shrinks with the heap; a second one fills the cash in your hand
+      coreS += (lay.f - coreS) * Math.min(1, dt * 9);
+      if (Math.abs(lay.f - coreS) > 0.003) busy = true;
+      core.scale.setScalar(Math.max(0.0001, coreS));
+      core2.visible = nH > 0;
+      if (nH) { core2.scale.setScalar(layH.f * 0.85); core2.position.set(hand.x, hand.y - layH.H * 0.85 - 0.006, hand.z); }
+      // the label floats above the heap, or above your hand while you carry cash
       if (nH) text.object3D.position.set(hand.x * s, hand.y * s + 0.05, hand.z * s);
-      else text.object3D.position.set(0, lay.H * s + 0.032, 0);
+      else text.object3D.position.set(0, lay.H * s + 0.036, 0);
       awake = busy;
     }
   };
@@ -699,8 +726,10 @@ function build() {
   buildMarket(market);
 
   // glove-style hands: A-Frame's built-in hand model, drawn see-through over your real hands
-  if (S.handStyle === "glove") ["left", "right"].forEach((h) =>
-    mk("a-entity", { "hand-tracking-controls": `hand: ${h}; modelStyle: mesh; modelColor: #e9eef3; modelOpacity: 0.45` }, market.sceneEl));
+  if (S.handStyle === "glove") ["left", "right"].forEach((h) => {
+    const el = mk("a-entity", { "hand-tracking-controls": `hand: ${h}; modelStyle: mesh` }, market.sceneEl);
+    el.addEventListener("object3dset", () => setTimeout(() => { try { styleGlove(el); } catch (err) { console.warn("glove:", err); } }, 0));
+  });
 
   // computer screens: tilt the view down toward the table
   const lc = document.getElementById("cam").components["look-controls"];
@@ -709,6 +738,29 @@ function build() {
   refresh();
   loadCats();
   setInterval(dataTick, 1000);
+}
+
+/* ---------- glove hands: dark and see-through with a bright edge ----------
+   The hand is drawn in two steps. Step 1 only records its shape (no color). Step 2 colors just the surface
+   nearest to you. That way overlapping fingers never show through each other as speckles. */
+function styleGlove(el) {
+  const comp = el.components["hand-tracking-controls"], o = comp && comp.skinnedMesh;
+  if (!o || o.userData.tmGlove) return;
+  o.userData.tmGlove = true;
+  const g = o.geometry, n = g.index ? g.index.count : g.attributes.position.count;
+  g.clearGroups(); g.addGroup(0, n, 0); g.addGroup(0, n, 1);
+  const shape = new THREE.MeshBasicMaterial({ colorWrite: false });
+  const skin = new THREE.MeshStandardMaterial({ color: 0x0c0e11, transparent: true, depthWrite: false, roughness: 1 });
+  skin.onBeforeCompile = (sh) => {
+    sh.fragmentShader = sh.fragmentShader.replace("#include <dithering_fragment>", `#include <dithering_fragment>
+      float tmRim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.2);
+      gl_FragColor = vec4(mix(vec3(0.03, 0.035, 0.04), vec3(0.92, 0.95, 1.0), tmRim), mix(0.32, 0.95, tmRim));`);
+  };
+  skin.customProgramCacheKey = () => "tm-glove";   // make sure this look is compiled on its own, not swapped for a plain one
+  skin.needsUpdate = true;
+  const mats = [shape, skin];
+  mats.color = new THREE.Color();              // A-Frame may try to recolor "the" material; this keeps that harmless
+  o.material = mats; o.renderOrder = 20; o.frustumCulled = false;
 }
 
 /* ---------- lobby: category tabs and market cards ---------- */
@@ -1108,7 +1160,7 @@ function toggleSim() {
     if (m.kind === "duel") opts[1].price = 1 - opts[0].price;
     opts.forEach((o) => o.hist.pts.push({ t: Date.now(), p: o.price, sim: true }));
     refresh();
-    if (++ticks >= 16) stopSim();
+    if (++ticks >= 16 && grab.i < 0) stopSim();      // do not end while you are holding cash
   }, 1300);
   refresh();
 }
@@ -1240,41 +1292,42 @@ function refresh() {
   PILES.forEach((p, i) => p.proxy.classList.toggle("clickable", !!pickAt(i) && state.sel === null));
 }
 
-/* ---------- cashing out: pinch cash off the mound, carry it off the court, let go ----------
-   Fingers near the mound light up the part a pinch would take and show what it is worth:
-   low on the mound = all of it, higher up = only the top slice.
-   Pinch to lift that part. It is still your pick while you hold it, so it keeps growing and shrinking with the odds.
-   Let go over the court = it drops back, nothing happens. Let go anywhere else = that part is cashed out.
-   A mouse or controller can press the mound twice to cash out all of it.
+/* ---------- cashing out: pinch cash off the heap, carry it off the court, let go ----------
+   Hand near the heap: the height of your fingers picks an amount from 1% (high) to 100% (at the table).
+   That share of the heap lights up and the label shows the dollars and the percent.
+   Pinch to lift that share. It is still your pick while you hold it, so it keeps growing and shrinking with the odds
+   (also during "Simulate odds", where the amounts are labeled as simulated).
+   Let go over the court = it drops back, nothing happens. Let go anywhere else = that share is cashed out.
+   A mouse or controller can press the heap twice to cash out all of it.
    Cash-out is local test money (not on a blockchain yet). */
 const grab = { i: -1, over: true };
-const hover = { k: [0, 0], shown: [0, 0] }, armed = [0, 0];
+const hover = { raw: [0, 0], smooth: [0, 0], pct: [0, 0] }, armed = [0, 0];
 const gv = new THREE.Vector3(), gv2 = new THREE.Vector3();
+const simTag = () => (state.sim ? " (simulated)" : "");
 function pickAt(i) {
   if (!inMarket()) return null;
   const leg = legsOf(state.market)[i], key = pickKey(state.market, leg), pos = state.picks[key];
   return pos ? { key, pos, value: pos.shares * legPrice(leg) } : null;
 }
 const pileCenter = (i) => PILES[i].holder.object3D.localToWorld(gv.set(0, 0.03, 0));
-// how many bundles a pinch here (or a controller pointing here) would take from mound i
+// the share (0 to 1) a pinch here, or a controller pointing here, would take from heap i
 function hoverFor(i, point, ray) {
   if (!pickAt(i)) return 0;
-  if (point) return PILES[i].hoverK(point);
-  return ray.ray.distanceToPoint(pileCenter(i)) < 0.07 ? PILES[i].moundCount() : 0;
+  if (point) return PILES[i].hoverFrac(point);
+  return ray.ray.distanceToPoint(pileCenter(i)) < 0.07 ? 1 : 0;
 }
 function pileText(i, value, change) {
-  const pile = PILES[i], n = pile.count() || 1;
-  if (grab.i === i) return grab.over ? "Let go here to put it back" : "Let go to cash out " + money(value * pile.heldCount() / n);
-  if (performance.now() < armed[i]) return "Press again to cash out " + money(value);
-  if (hover.shown[i] > 0) { const f = hover.shown[i] / n; return "Pinch to take " + money(value * f) + (f < 0.995 ? `  (${pct(f)})` : "  (all)"); }
-  return `${money(value)}  (${change >= 0 ? "+" : "-"}${money(Math.abs(change))})`;
+  const pile = PILES[i];
+  if (grab.i === i) return grab.over ? "Let go here to put it back" : "Let go to cash out " + money(value * pile.heldFrac) + simTag();
+  if (performance.now() < armed[i]) return "Press again to cash out " + money(value) + simTag();
+  if (hover.pct[i] > 0) return `Pinch to take ${money(value * hover.pct[i] / 100)}  (${hover.pct[i]}%)`;
+  return `${money(value)}  (${change > -0.005 ? "+" : "-"}${money(Math.abs(change))})`;
 }
 function grabBegin(i, frac, point) {
-  stopSim();                                   // cash out at the real price, never a simulated one
   const pile = PILES[i];
   if (!pickAt(i) || !pile.count()) return false;
   grab.i = i; grab.over = true;
-  pile.setLit(0); pile.hold(Math.round(frac * pile.count()), point || pileCenter(i).clone());
+  pile.setLit(0); pile.hold(frac, point || pileCenter(i).clone());
   UI.wallet.setColor(C.walletOn);
   state.lockUntil = Infinity;                  // fingertips press nothing while you carry cash
   return true;
@@ -1282,7 +1335,7 @@ function grabBegin(i, frac, point) {
 function grabDone(cashOut) {
   const i = grab.i, pile = PILES[i], p = pickAt(i);
   if (cashOut && p) {
-    const frac = pile.heldCount() / Math.max(1, pile.count());
+    const frac = pile.heldFrac;
     state.balance = Math.round((state.balance + p.value * frac) * 100) / 100;
     if (frac > 0.995) delete state.picks[p.key];
     else { p.pos.shares *= 1 - frac; p.pos.stake *= 1 - frac; }               // the rest of the pick stays on the table
@@ -1295,15 +1348,20 @@ function grabDone(cashOut) {
 }
 function grabReset() { if (grab.i >= 0) grabDone(false); }
 function stepGrab() {
-  // the lit-up part follows the fingers
+  // the percent follows the height of the fingers, smoothed a little so a shaky hand does not make it flicker
   let changed = false;
-  for (let i = 0; i < 2; i++) if (hover.k[i] !== hover.shown[i]) {
-    hover.shown[i] = hover.k[i]; changed = true;
-    if (grab.i !== i) PILES[i].setLit(hover.k[i]);
+  for (let i = 0; i < 2; i++) {
+    const raw = grab.i >= 0 ? 0 : hover.raw[i];
+    hover.smooth[i] = raw > 0 ? (hover.smooth[i] > 0 ? hover.smooth[i] + (raw - hover.smooth[i]) * 0.25 : raw) : 0;
+    const pctNow = raw > 0 ? clamp(Math.round(hover.smooth[i] * 100), 1, 100) : 0;
+    if (pctNow !== hover.pct[i]) {
+      hover.pct[i] = pctNow; changed = true;
+      if (grab.i !== i) PILES[i].setLit(pctNow ? Math.max(1, Math.round(PILES[i].count() * pctNow / 100)) : 0);
+    }
   }
   if (changed && inMarket()) refresh();
 }
-// mouse or controller trigger: press the mound once to arm, again within 3 seconds to cash out all of it
+// mouse or controller trigger: press the heap once to arm, again within 3 seconds to cash out all of it
 function pileClicked(i) {
   if (!pickAt(i) || grab.i >= 0 || state.sel !== null) return;
   const now = performance.now();
@@ -1318,18 +1376,19 @@ window.TM = {
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => { stepPhysics(now); stepGrab(); PILES.forEach((p) => p.update(now)); },
-  // cash mound: light up when fingers are near, lift on pinch, carry, let go
-  hoverBegin: () => { hover.k[0] = hover.k[1] = 0; },
+  // cash heap: light up when a hand is near, lift on pinch, carry, let go
+  hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
   hoverAt: (point, ray) => {
     if (grab.i >= 0 || state.sel !== null || !inMarket()) return;
-    for (let i = 0; i < 2; i++) hover.k[i] = Math.max(hover.k[i], hoverFor(i, point, ray));
+    for (let i = 0; i < 2; i++) hover.raw[i] = Math.max(hover.raw[i], hoverFor(i, point, ray));
   },
   grabStart: (point, ray) => {
     if (grab.i >= 0 || state.sel !== null || !inMarket()) return null;
-    let i = -1, k = 0;
-    for (let j = 0; j < 2; j++) { const kj = hoverFor(j, point, ray); if (kj > k) { k = kj; i = j; } }
+    let i = -1, f = 0;
+    for (let j = 0; j < 2; j++) { const fj = hoverFor(j, point, ray); if (fj > f) { f = fj; i = j; } }
     if (i < 0) return null;
-    if (!grabBegin(i, k / PILES[i].count(), point)) return null;
+    if (hover.pct[i] > 0) f = hover.pct[i] / 100;                 // take exactly the percent that was showing
+    if (!grabBegin(i, f, point)) return null;
     refresh();
     return point ? 0 : ray.ray.origin.distanceTo(pileCenter(i));
   },
@@ -1337,7 +1396,7 @@ window.TM = {
     if (grab.i < 0) return;
     PILES[grab.i].moveHand(p);
     const lp = document.getElementById("market").object3D.worldToLocal(gv2.copy(p));
-    const over = Math.abs(lp.x) < 0.33 && lp.z > -0.19 && lp.z < 0.21 && lp.y < 0.16;   // still above the court?
+    const over = Math.abs(lp.x) < 0.33 && lp.z > -0.19 && lp.z < 0.21 && lp.y < 0.22;   // still above the court?
     if (over !== grab.over) { grab.over = over; refresh(); }
   },
   grabEnd: () => { if (grab.i >= 0) grabDone(!grab.over); },
