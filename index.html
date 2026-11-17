@@ -32,6 +32,8 @@
   #windowBtn { background: transparent; color: #aab1bb; border: 1px solid #2c3037; font-size: 14px;
                padding: 11px; margin-top: 10px; }
   #windowBtn:hover { color: #f2f4f7; border-color: #4d535d; }
+  #liveBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 8px; margin-top: 6px; }
+  #liveBtn.on { color: #2fbf71; }
   #wStatus { font-size: 13px; color: #8d95a0; margin: 22px 0 6px; min-height: 18px; }
   #wStatus.live { color: #2fbf71; }
   #welcome .fine { font-size: 12px; color: #6f7782; line-height: 1.5; margin: 0; }
@@ -48,6 +50,7 @@
     <p class="pitch">A prediction market you can put on your table.<br>Pick a market, pick a side, watch your pick move.</p>
     <button id="enterBtn">Enter</button>
     <button id="windowBtn">View on this screen instead</button>
+    <button id="liveBtn" style="display:none">Owner: turn on live trading</button>
     <p id="wStatus">Loading markets from Gemini...</p>
     <p class="fine">Demo with test money only. No real money is used or paid out.<br>
        Every market and price comes from Gemini prediction markets.</p>
@@ -79,6 +82,8 @@ const SETTINGS = {
   handStyle: "glove",   // "glove" = see-through hand shape, "outline" = dots and lines, "none" = nothing drawn
   grabReach: 0.10,      // how far out to the side of the cash heap (meters) a pinch still counts
   cashRange: 0.16,      // hand height (meters) above the table where the cash-out amount reads 1%. At the table it reads 100%
+  serverUrl: "",        // address of the private server (server/worker.js). Empty = test money only, no real trades
+  liveBudget: 10,       // live mode only: how many real dollars this session may spend in total
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
   fallbackCategories: ["Sports", "Crypto", "Economics", "Commodities", "Politics", "Culture", "Weather", "Business", "Tech"],
@@ -714,7 +719,7 @@ function build() {
   const bal = mk("a-entity", { position: "-0.45 0.045 0.20", rotation: "-35 18 0" }, market);
   UI.walletAt = bal;
   UI.wallet = slab(bal, 0.20, 0.09, 0.008, C.panel, { r: 0.018, opacity: SEE });
-  label(bal, "Test balance", 0, 0.029, 0.006, 0.0062, C.dim);
+  UI.balTitle = label(bal, "Test balance", 0, 0.029, 0.006, 0.0062, C.dim);
   UI.balance = label(bal, "", 0, 0.003, 0.006, 0.017, C.text);
   UI.interest = label(bal, `Earning ${S.interestRate}% while idle (preview)`, 0, -0.027, 0.006, 0.0052, C.green);
 
@@ -964,10 +969,11 @@ function pressRow(i) {
 function rowsTurned() { refresh(); last.game = Date.now(); pollOptions(viewOptions(), state.market); }
 
 /* ---------- amount entry ---------- */
-const sliderMax = () => Math.max(1, Math.min(state.balance, 100));
+const sliderMax = () => Math.max(1, Math.min(state.balance, LIVE.on ? LIVE.cap : 100));
 const sliderValue = (x) => Math.round(clamp(x / 0.29 + 0.5, 0, 1) * sliderMax());
 function setAmount(v, keepTyped) {
-  state.amount = Math.round(clamp(v, 0, state.balance) * 100) / 100;
+  state.amount = Math.round(clamp(v, 0, LIVE.on ? Math.min(state.balance, LIVE.cap) : state.balance) * 100) / 100;
+  state.note = "";
   if (!keepTyped) state.typed = "";
   refreshPanel();
 }
@@ -981,20 +987,69 @@ function typeKey(k) {
 }
 function openPanel(i) {
   if (!inMarket()) return;
-  state.sel = i; state.typed = "";
+  state.sel = i; state.typed = ""; state.note = "";
   if (state.amount <= 0 || state.amount > state.balance) state.amount = Math.min(5, state.balance);
+  if (LIVE.on) state.amount = Math.min(state.amount, LIVE.cap);
   UI.panel.setAttribute("visible", true);
   lockFingers(); refresh();
 }
 function closePanel() { state.sel = null; UI.panel.setAttribute("visible", false); lockFingers(); refresh(); }
+function addPick(m, leg, cost, shares) {
+  const key = pickKey(m, leg), cur = state.picks[key] || { stake: 0, shares: 0 };
+  state.balance = Math.round((state.balance - cost) * 100) / 100;
+  state.picks[key] = { stake: cur.stake + cost, shares: cur.shares + shares, unit: unitFor(cur.stake + cost) };
+}
+function panelNote(text) { state.note = text; refreshPanel(); }
 function confirmPick() {
   const amt = state.amount;
-  if (state.sel === null || !inMarket() || amt <= 0 || amt > state.balance + 1e-9) return;
-  const m = state.market, leg = legsOf(m)[state.sel], key = pickKey(m, leg);
-  state.balance = Math.round((state.balance - amt) * 100) / 100;
-  const cur = state.picks[key] || { stake: 0, shares: 0 };
-  state.picks[key] = { stake: cur.stake + amt, shares: cur.shares + amt / legPrice(leg), unit: unitFor(cur.stake + amt) };
-  closePanel();
+  if (state.sel === null || !inMarket() || amt <= 0 || amt > state.balance + 1e-9 || LIVE.busy) return;
+  const m = state.market, leg = legsOf(m)[state.sel];
+  if (!LIVE.on) { addPick(m, leg, amt, amt / legPrice(leg)); return closePanel(); }      // test money
+
+  // live mode: a real order on Gemini, paid from the owner's account
+  if (!leg.o.sym || leg.o.dead) return panelNote("This market cannot be traded now");
+  const price = tradePrice(leg, "buy"), qty = Math.floor(Math.min(amt, LIVE.cap) / price * 100) / 100;
+  if (qty < 0.01) return panelNote("Amount is too small");
+  LIVE.busy = true; panelNote("Placing order on Gemini...");
+  serverCall("/order", { symbol: leg.o.sym, side: "buy", outcome: leg.side, quantity: qty.toFixed(2), price: price.toFixed(2) }).then((r) => {
+    LIVE.busy = false;
+    const filled = parseFloat(r.filledQuantity) || 0, avg = parseFloat(r.avgExecutionPrice) || price;
+    LIVE.orders.push({ id: r.orderId, side: "buy", symbol: leg.o.sym, outcome: leg.side, filled, avg });
+    if (filled <= 0) return panelNote("Order did not fill. Try again");
+    addPick(m, leg, filled * avg, filled);
+    closePanel();
+  }).catch((err) => { LIVE.busy = false; panelNote(trunc("Gemini: " + err.message, 38)); });
+}
+
+/* ---------- live mode: real Gemini orders, only for the owner ----------
+   The app never holds a Gemini key. It asks the private server (server/worker.js) to place the order,
+   and the server only obeys if the passcode is right. Orders are "fill now or cancel", and the server
+   refuses any buy above its dollar limit. */
+const LIVE = { on: false, pass: "", cap: 1, busy: false, orders: [] };
+async function serverCall(path, body) {
+  const r = await fetch(S.serverUrl.replace(/\/+$/, "") + path, {
+    method: "POST", headers: { "Content-Type": "application/json", "X-TM-Pass": LIVE.pass }, body: JSON.stringify(body || {})
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || ("server said " + r.status));
+  return j;
+}
+// the price to send with an order: buy at what sellers ask, sell at what buyers bid
+function tradePrice(leg, side) {
+  const o = leg.o, bid = o.bid != null ? o.bid : o.price - 0.01, ask = o.ask != null ? o.ask : o.price + 0.01;
+  const yes = side === "buy" ? ask : bid, no = side === "buy" ? 1 - bid : 1 - ask;
+  return Math.round(clamp(leg.side === "yes" ? yes : no, 0.01, 0.99) * 100) / 100;
+}
+async function unlockLive(pass) {
+  LIVE.pass = pass;
+  const r = await serverCall("/unlock", {});
+  LIVE.on = true; LIVE.cap = r.maxOrderUsd || 1;
+  stopSim();
+  state.picks = {}; state.balance = S.liveBudget; state.amount = Math.min(state.amount, LIVE.cap);
+  UI.balTitle.setAttribute("value", r.sandbox ? "Live budget (practice)" : "Live budget (REAL money)");
+  UI.interest.setAttribute("value", "Orders up to " + money(LIVE.cap) + " each on Gemini");
+  refresh();
+  return r;
 }
 
 /* ---------- data from Gemini ---------- */
@@ -1104,6 +1159,7 @@ async function pollOptions(opts, m) {
   await Promise.all(opts.filter((o) => o && o.sym && !o.dead).map((o) =>
     getJSON(GEMINI_TICKER + encodeURIComponent(o.sym), 8000).then((j) => {
       const p = midPrice(j.bid, j.ask, j.last);
+      o.bid = num(j.bid); o.ask = num(j.ask);                  // Gemini's real sell and buy prices, used for live orders
       if (p === null || (state.sim && m && m === state.market)) return;
       o.price = clamp(p, 0.01, 0.99); changed = true;
       if (o.hist && o.hist.loaded) { o.hist.pts.push({ t: Date.now(), p: o.price }); if (o.hist.pts.length > 600) o.hist.pts.shift(); }
@@ -1148,7 +1204,7 @@ function dataTick() {
 let simTimer = null, simSaved = null;
 function toggleSim() {
   if (state.sim) return stopSim();
-  if (!inMarket()) return;
+  if (!inMarket() || LIVE.on) return;            // never simulate prices while real money is in play
   const m = state.market, opts = graphOptions();
   state.sim = true;
   simSaved = opts.map((o) => ({ o, price: o.price }));
@@ -1193,7 +1249,7 @@ function refreshPanel() {
   const what = state.market.kind === "duel" ? leg.name : `${leg.name}: ${leg.o.name}`;
   UI.pTitle.setAttribute("value", `${trunc(what, 30)}  ${pct(p)}`);
   UI.pAmount.setAttribute("value", state.typed !== "" ? "$" + state.typed : money(state.amount));
-  UI.pWin.setAttribute("value", state.amount > 0 ? `Risk ${money(state.amount)} to win ${money(state.amount / p)}` : "Choose an amount");
+  UI.pWin.setAttribute("value", state.note ? state.note : state.amount > 0 ? `Risk ${money(state.amount)} to win ${money(state.amount / p)}` : "Choose an amount");
   UI.knob.object3D.position.x = (clamp(state.amount / sliderMax(), 0, 1) - 0.5) * 0.29;
 }
 function refreshLobby() {
@@ -1232,9 +1288,10 @@ function refreshMarket() {
   UI.title.setAttribute("value", trunc(m.title, 120));
   UI.when.setAttribute("value", whenText(m));
   UI.when.setAttribute("color", m.sport && m.live ? C.green : C.dim);
-  UI.status.setAttribute("value", state.sim ? "Simulated odds (demo, not real)" : live ? "Live odds from Gemini" : "Sample odds");
+  UI.status.setAttribute("value", state.sim ? "Simulated odds (demo, not real)" : LIVE.on ? "LIVE: real orders on Gemini" :
+                                  live ? "Live odds from Gemini" : "Sample odds");
   UI.status.setAttribute("color", !state.sim && live ? C.green : C.dim);
-  UI.simBtn.t.setAttribute("value", state.sim ? "Stop simulation" : "Simulate odds");
+  UI.simBtn.t.setAttribute("value", LIVE.on ? "Live: no simulation" : state.sim ? "Stop simulation" : "Simulate odds");
   // answers on the board
   m.rowPage = clamp(m.rowPage, 0, rowPages(m) - 1);
   ROWS.forEach((row) => {
@@ -1316,8 +1373,12 @@ function hoverFor(i, point, ray) {
   if (point) return PILES[i].hoverFrac(point);
   return ray.ray.distanceToPoint(pileCenter(i)) < 0.07 ? 1 : 0;
 }
+const cashNotes = [null, null];
+function cashNote(i, text) { cashNotes[i] = { text, until: performance.now() + 3000 }; setTimeout(refresh, 3100); }
 function pileText(i, value, change) {
   const pile = PILES[i];
+  if (grab.i === i && grab.pending) return "Selling on Gemini...";
+  if (cashNotes[i] && performance.now() < cashNotes[i].until) return cashNotes[i].text;
   if (grab.i === i) return grab.over ? "Let go here to put it back" : "Let go to cash out " + money(value * pile.heldFrac) + simTag();
   if (performance.now() < armed[i]) return "Press again to cash out " + money(value) + simTag();
   if (hover.pct[i] > 0) return `Pinch to take ${money(value * hover.pct[i] / 100)}  (${hover.pct[i]}%)`;
@@ -1332,21 +1393,38 @@ function grabBegin(i, frac, point) {
   state.lockUntil = Infinity;                  // fingertips press nothing while you carry cash
   return true;
 }
+// the share `frac` of pick i has been sold for `proceeds` dollars: pay it in and shrink the pick
+function settleCash(i, frac, proceeds) {
+  const pile = PILES[i], p = pickAt(i);
+  if (!p) return;
+  state.balance = Math.round((state.balance + proceeds) * 100) / 100;
+  if (frac > 0.995) delete state.picks[p.key];
+  else { p.pos.shares *= 1 - frac; p.pos.stake *= 1 - frac; }                 // the rest of the pick stays on the table
+  pile.release(UI.walletAt.object3D.getWorldPosition(gv));
+  UI.balance.setAttribute("color", C.green);
+  setTimeout(() => UI.balance.setAttribute("color", C.text), 900);
+}
+function endGrab() { grab.i = -1; grab.pending = false; UI.wallet.setColor(C.panel); lockFingers(); refresh(); }
 function grabDone(cashOut) {
   const i = grab.i, pile = PILES[i], p = pickAt(i);
-  if (cashOut && p) {
-    const frac = pile.heldFrac;
-    state.balance = Math.round((state.balance + p.value * frac) * 100) / 100;
-    if (frac > 0.995) delete state.picks[p.key];
-    else { p.pos.shares *= 1 - frac; p.pos.stake *= 1 - frac; }               // the rest of the pick stays on the table
-    pile.release(UI.walletAt.object3D.getWorldPosition(gv));
-    UI.balance.setAttribute("color", C.green);
-    setTimeout(() => UI.balance.setAttribute("color", C.text), 900);
-  } else pile.release(null);
-  grab.i = -1;
-  UI.wallet.setColor(C.panel); lockFingers(); refresh();
+  if (grab.pending) return;                                                    // a real sell is on its way; wait for it
+  if (!cashOut || !p) { pile.release(null); return endGrab(); }
+  if (!LIVE.on) { settleCash(i, pile.heldFrac, p.value * pile.heldFrac); return endGrab(); }   // test money
+
+  // live mode: sell that share on Gemini. The cash stays in the air until Gemini answers.
+  const leg = legsOf(state.market)[i], price = tradePrice(leg, "sell"), qty = Math.floor(p.pos.shares * pile.heldFrac * 100) / 100;
+  if (qty < 0.01 || !leg.o.sym) { cashNote(i, "Too small to sell"); pile.release(null); return endGrab(); }
+  grab.pending = true; refresh();
+  serverCall("/order", { symbol: leg.o.sym, side: "sell", outcome: leg.side, quantity: qty.toFixed(2), price: price.toFixed(2) }).then((r) => {
+    const filled = parseFloat(r.filledQuantity) || 0, avg = parseFloat(r.avgExecutionPrice) || price, now = pickAt(i);
+    LIVE.orders.push({ id: r.orderId, side: "sell", symbol: leg.o.sym, outcome: leg.side, filled, avg });
+    grab.pending = false;
+    if (filled <= 0 || !now) { cashNote(i, "Could not sell right now"); pile.release(null); return endGrab(); }
+    settleCash(i, Math.min(1, filled / now.pos.shares), filled * avg);
+    endGrab();
+  }).catch((err) => { grab.pending = false; cashNote(i, trunc("Gemini: " + err.message, 38)); pile.release(null); endGrab(); });
 }
-function grabReset() { if (grab.i >= 0) grabDone(false); }
+function grabReset() { if (grab.i >= 0 && !grab.pending) grabDone(false); }
 function stepGrab() {
   // the percent follows the height of the fingers, smoothed a little so a shaky hand does not make it flicker
   let changed = false;
@@ -1393,7 +1471,7 @@ window.TM = {
     return point ? 0 : ray.ray.origin.distanceTo(pileCenter(i));
   },
   grabMove: (p) => {
-    if (grab.i < 0) return;
+    if (grab.i < 0 || grab.pending) return;
     PILES[grab.i].moveHand(p);
     const lp = document.getElementById("market").object3D.worldToLocal(gv2.copy(p));
     const over = Math.abs(lp.x) < 0.33 && lp.z > -0.19 && lp.z < 0.21 && lp.y < 0.22;   // still above the court?
@@ -1451,6 +1529,19 @@ enterBtn.addEventListener("click", () => {
   if (arReady && scene.enterAR) Promise.resolve(scene.enterAR()).catch((err) => console.warn("AR did not start:", err));
 });
 windowBtn.addEventListener("click", closeWelcome);
+// owner only: type the passcode to switch from test money to real Gemini orders
+const liveBtn = document.getElementById("liveBtn");
+if (S.serverUrl) liveBtn.style.display = "block";
+liveBtn.addEventListener("click", () => {
+  if (LIVE.on) return;
+  const pass = window.prompt("Owner passcode (turns on REAL Gemini orders)");
+  if (!pass) return;
+  liveBtn.textContent = "Checking...";
+  unlockLive(pass).then((r) => {
+    liveBtn.className = "on";
+    liveBtn.textContent = (r.sandbox ? "Live trading ON (practice site)" : "Live trading ON: real money") + ", max " + money(LIVE.cap) + " per order";
+  }).catch((err) => { LIVE.on = false; LIVE.pass = ""; liveBtn.textContent = "Not unlocked: " + err.message; });
+});
 
 if (scene.hasLoaded) build(); else scene.addEventListener("loaded", build);
 scene.addEventListener("enter-vr", () => { note.style.display = "none"; });
