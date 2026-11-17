@@ -139,6 +139,10 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Brian deployed TabletopEscrow from the in-app panel on his PC: 0xB042A8BF2c3a65093967c9Ef053bFD11d145Ee0d on Arc testnet (chain 5042002). Confirmed by Claude via RPC: 1693 bytes of code, totalLocked() = 0. Hardcoded in SETTINGS.arc.escrow. This is the address for the README and Devpost.
 - Not yet seen working: a real placePick or cashOut from the app.
 
+## Cash cone of up to 1,000 notes, Nov 17 (UNTESTED)
+- Brian asked for about 1,000 bills and a heap made only of bills shaped into a cone. MAXB is now 1000 (instance capacity CAP 1300), the solid core is hidden, and `layout(n)` fills the whole cone volume (equal space per note, bottom to top, more notes near the outside). A new pick uses at most 400 notes (`unitFor` units now start at $0.01) so it can grow. The drop-in animation takes about a second however many notes arrive.
+- Risk to check in the headset: frame rate with up to 2,000 moving notes on two piles.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
