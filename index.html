@@ -1087,7 +1087,7 @@ function confirmPick() {
     addPick(m, leg, filled * avg, filled, "gemini order " + r.orderId);
     setTimeout(liveBalance, 1500);
     closePanel();
-  }).catch((err) => { LIVE.busy = false; panelNote(trunc("Gemini: " + err.message, 38)); });
+  }).catch((err) => { LIVE.busy = false; console.warn("Gemini order:", err.message); panelNote(trunc("Gemini: " + err.message, 120)); });
 }
 
 /* ---------- live mode: real Gemini orders, only for the owner ----------
@@ -1131,7 +1131,11 @@ function liveBalance() {
     if (!LIVE.on || !isFinite(b.usd)) return;
     state.balance = Math.round(b.usd * 100) / 100;
     refresh();
-  }).catch((err) => console.warn("Gemini balance:", err.message));
+  }).catch((err) => {
+    console.warn("Gemini balance:", err.message);
+    UI.interest.setAttribute("value", trunc(/Unknown path/.test(err.message) ? "Balance: update the server code in Cloudflare"
+                                                                                : "Balance unavailable: " + err.message, 60));
+  });
 }
 
 /* ---------- data from Gemini ---------- */
@@ -1513,7 +1517,7 @@ function grabDone(cashOut) {
     settleCash(i, Math.min(1, filled / now.pos.shares), filled * avg, "gemini order " + r.orderId);
     setTimeout(liveBalance, 1500);
     endGrab();
-  }).catch((err) => { grab.pending = false; cashNote(i, trunc("Gemini: " + err.message, 38)); pile.release(null); endGrab(); });
+  }).catch((err) => { grab.pending = false; console.warn("Gemini sell:", err.message); cashNote(i, trunc("Gemini: " + err.message, 120)); pile.release(null); endGrab(); });
 }
 function grabReset() { if (grab.i >= 0 && !grab.pending) grabDone(false); }
 function stepGrab() {
