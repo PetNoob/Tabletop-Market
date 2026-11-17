@@ -48,6 +48,19 @@ export default {
 
     try {
       // anyone may ask whether the server is set up. It never reveals a secret.
+      // Gemini's market pictures (bitcoin, oil barrel, team shoes and helmets). Gemini's image server does not let
+      // web pages draw them in 3D, so they are passed through here with that permission added. Only Gemini images.
+      if (path === "/img") {
+        const u = new URL(request.url).searchParams.get("u") || "";
+        if (!/^https:\/\/assets\.gemini\.com\/[A-Za-z0-9._\/-]+$/.test(u)) return reply({ error: "Only Gemini images" }, 400);
+        const r = await fetch(u, { cf: { cacheTtl: 86400, cacheEverything: true } });
+        if (!r.ok) return reply({ error: "image " + r.status }, 502);
+        const h = new Headers(cors);
+        h.set("Content-Type", r.headers.get("Content-Type") || "image/png");
+        h.set("Cache-Control", "public, max-age=86400");
+        return new Response(r.body, { status: 200, headers: h });
+      }
+
       if (path === "/" || path === "/status") {
         return reply({ ok: true, tradingConfigured: configured, unlocked, maxOrderUsd: maxUsd, sandbox: env.GEMINI_SANDBOX === "1" });
       }

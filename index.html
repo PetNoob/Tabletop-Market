@@ -104,6 +104,7 @@ const SETTINGS = {
     dollarsToUsdc: 0.01 // each app dollar locks this much test USDC (the faucet only gives 10 per hour)
   },
   liveBudget: 10,       // live mode only: shown until the real Gemini balance arrives (and used if the server cannot fetch it)
+  icons: true,          // show Gemini's market pictures (needs serverUrl, which passes them through)
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
   fallbackCategories: ["Sports", "Crypto", "Economics", "Commodities", "Politics", "Culture", "Weather", "Business", "Tech"],
@@ -833,6 +834,42 @@ function styleGlove(el) {
 }
 
 /* ---------- lobby: category tabs and market cards ---------- */
+/* ---------- Gemini's market pictures ---------- */
+const TEX = {};
+function iconEntry(url) {
+  if (!url || !S.icons || !S.serverUrl) return null;
+  let e = TEX[url];
+  if (!e) {
+    e = TEX[url] = { tex: null, failed: false, waiting: [] };
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      const tx = new THREE.Texture(img); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 4; tx.needsUpdate = true;
+      e.tex = tx; e.waiting.forEach((f) => f(tx)); e.waiting = [];
+    };
+    img.onerror = () => { e.failed = true; e.waiting = []; };
+    img.src = S.serverUrl.replace(/\/+$/, "") + "/img?u=" + encodeURIComponent(url);
+  }
+  return e;
+}
+// a small square picture attached to a panel; hidden until the picture arrives
+function iconMesh(parentEl, size, x, y, z) {
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(size, size),
+                           new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, toneMapped: false }));
+  m.position.set(x, y, z); m.renderOrder = 5; m.visible = false;
+  parentEl.object3D.add(m);
+  return m;
+}
+// show `url` on the icon; returns true if a picture is (or will be) shown, so text can make room
+function setIcon(mesh, url) {
+  mesh.userData.url = url || "";
+  const e = iconEntry(url);
+  if (!e || e.failed) { mesh.visible = false; return false; }
+  const apply = (tx) => { if (mesh.userData.url !== url) return; mesh.material.map = tx; mesh.material.needsUpdate = true; mesh.visible = true; };
+  if (e.tex) apply(e.tex); else { mesh.visible = false; e.waiting.push(apply); }
+  return true;
+}
+
 function buildLobby(market) {
   const L = UI.lobby = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
   slab(L, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE });
@@ -859,6 +896,7 @@ function buildLobby(market) {
     const card = { m: null };
     const b = card.b = button(L, "", x, y, 0.30, 0.082, () => (card.act ? openActivity(card.act) : openMarket(card.m)),
                               { r: 0.014, enabled: () => inLobby() && (!!card.m || !!(card.act && card.act.ticker)) });
+    card.icon = iconMesh(b.el, 0.024, -0.126, 0.02, b.tz);
     card.title = label(b.el, "", -0.138, 0.032, b.tz, 0.0062, C.text, "left", 0.165, "top");
     card.foot  = label(b.el, "", -0.138, -0.029, b.tz, 0.0054, C.dim, "left");
     card.rows = [0.015, -0.015].map((ry) => ({
@@ -902,6 +940,7 @@ function buildMarket(market) {
   // board at the back: title, answers on the left, graph on the right
   const B = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, G);
   slab(B, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE });
+  UI.titleIcon = iconMesh(B, 0.036, -0.29, 0.177, 0.0065);
   UI.title = label(B, "", -0.308, 0.195, 0.006, 0.0092, C.text, "left", 0.616, "top");
   UI.when = label(B, "", -0.308, 0.128, 0.006, 0.0066, C.dim, "left");
   UI.status = label(B, "", 0.308, 0.128, 0.006, 0.0066, C.dim, "right");
@@ -910,6 +949,7 @@ function buildMarket(market) {
     const b = row.b = button(B, "", -0.165, 0.076 - i * 0.056, 0.29, 0.05, () => pressRow(row.i),
                              { r: 0.012, enabled: () => inMarket() && !!rowOption(row.i) });
     row.chip = slab(b.el, 0.005, 0.03, 0.002, C.line, { r: 0.0025, order: 2, pos: `-0.134 0 ${b.tz}` });
+    row.icon = iconMesh(b.el, 0.026, -0.112, 0, b.tz);
     row.name = label(b.el, "", -0.124, 0.006, b.tz, 0.0064, C.text, "left");
     row.mine = label(b.el, "", -0.124, -0.013, b.tz, 0.005, C.green, "left");
     row.pct = label(b.el, "", 0.134, 0, b.tz, 0.012, C.text, "right");
@@ -940,6 +980,7 @@ function buildMarket(market) {
   UI.pills = [-1, 1].map((dir, i) => {
     const b = button(lip, "", dir * 0.166, 0, 0.318, 0.058, () => openPanel(i),
                      { r: 0.029, d: 0.014, opacity: 0.96, enabled: () => inMarket() && state.sel === null });
+    b.icon = iconMesh(b.el, 0.036, -0.124, 0, b.tz);
     b.name = label(b.el, "", -0.136, 0, b.tz, 0.0088, C.text, "left");
     b.pct = label(b.el, "", 0.136, 0, b.tz, 0.0155, C.text, "right");
     return b;
@@ -1074,7 +1115,7 @@ function addPick(m, leg, cost, shares, ref) {
   const key = pickKey(m, leg), cur = state.picks[key] || { stake: 0, shares: 0 };
   state.balance = Math.round((state.balance - cost) * 100) / 100;
   const what = m.kind === "list" ? `${leg.name} on ${leg.o.name}` : leg.name;
-  state.picks[key] = { stake: cur.stake + cost, shares: cur.shares + shares, unit: unitFor(cur.stake + cost), title: m.title, what };
+  state.picks[key] = { stake: cur.stake + cost, shares: cur.shares + shares, unit: unitFor(cur.stake + cost), title: m.title, what, img: m.image };
   logActivity({ side: "Bought", title: m.title, what, amount: cost, price: legPrice(leg), ticker: m.ticker, ref });
   saveTestState();
   // lock the stake on Arc with a readable receipt (does nothing if Arc is not set up)
@@ -1190,7 +1231,7 @@ function toMarket(e) {
                                  color: accent(c.color) || SPARE[i % SPARE.length],
                                  price: priceOf(c), sym: c.instrumentSymbol || "", hist: null,
                                  bid: num(c.prices && c.prices.bestBid), ask: num(c.prices && c.prices.bestAsk),
-                                 closed: !!c.marketState && c.marketState !== "open" }));
+                                 closed: !!c.marketState && c.marketState !== "open", image: c.imageUrl || "" }));
   if (opts.length === 2 && opts[0].price === null && opts[1].price !== null) opts[0].price = 1 - opts[1].price;
   if (opts.length === 2 && opts[1].price === null && opts[0].price !== null) opts[1].price = 1 - opts[0].price;
   opts = opts.filter((o) => o.price !== null);
@@ -1202,7 +1243,7 @@ function toMarket(e) {
   if (duel && opts[0].color === opts[1].color) opts[1].color = SPARE[1];
   const sub = (e.subcategory && e.subcategory.name) || "";
   const date = (v) => { const d = v ? new Date(v) : null; return d && !isNaN(d) ? d : null; };
-  return { ticker: e.ticker, title: clean(e.title) || "Market", category: e.category || "", sub,
+  return { ticker: e.ticker, title: clean(e.title) || "Market", category: e.category || "", sub, image: e.imageUrl || "",
            kind: duel ? "duel" : "list", opts, sel: 0, rowPage: 0,
            court: isGame, hoops: isGame && /basketball/i.test(sub),
            sport: e.category === "Sports", live: !!e.isLive, start: date(e.startTime), closes: date(e.expiryDate) };
@@ -1382,7 +1423,8 @@ function refreshLobby() {
     const m = card.m = shown[i] || null;
     card.b.el.setAttribute("visible", !!m);
     if (!m) return;
-    card.title.setAttribute("value", trunc(m.title, 50));
+    card.title.object3D.position.x = setIcon(card.icon, m.image) ? -0.11 : -0.138;
+    card.title.setAttribute("value", trunc(m.title, 46));
     const mine = stakedOn(m), live = m.sport && m.live;
     card.foot.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : whenText(m));
     card.foot.setAttribute("color", mine > 0 ? C.green : live ? C.red : C.dim);
@@ -1397,7 +1439,8 @@ function refreshLobby() {
 }
 function refreshMarket() {
   const m = state.market, legs = legsOf(m), now = performance.now(), live = curStore().source === "live" && !m.sample;
-  UI.title.setAttribute("value", trunc(m.title, 120));
+  UI.title.object3D.position.x = setIcon(UI.titleIcon, m.image) ? -0.264 : -0.308;
+  UI.title.setAttribute("value", trunc(m.title, 110));
   UI.when.setAttribute("value", whenText(m));
   UI.when.setAttribute("color", m.sport && m.live ? C.red : C.dim);
   UI.whenLive = !!(m.sport && m.live);
@@ -1416,6 +1459,7 @@ function refreshMarket() {
     row.chip.setColor(o.color);
     row.name.setAttribute("value", trunc(o.name, 24));
     row.name.object3D.position.y = mine > 0 ? 0.006 : 0;
+    row.name.object3D.position.x = row.mine.object3D.position.x = setIcon(row.icon, o.image) ? -0.094 : -0.124;
     row.mine.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : "");
     row.pct.setAttribute("value", pct(o.price));
   });
@@ -1439,7 +1483,8 @@ function refreshMarket() {
   UI.lip.setAttribute("visible", state.sel === null);
   legs.forEach((leg, i) => {
     const p = legPrice(leg), pos = state.picks[pickKey(m, leg)], pile = PILES[i];
-    UI.pills[i].name.setAttribute("value", trunc(leg.name, 17));
+    UI.pills[i].name.object3D.position.x = setIcon(UI.pills[i].icon, m.kind === "duel" ? leg.o.image : "") ? -0.1 : -0.136;
+    UI.pills[i].name.setAttribute("value", trunc(leg.name, 15));
     UI.pills[i].pct.setAttribute("value", pct(p));
     if (pos) {
       const value = pos.shares * p, change = value - pos.stake, unit = pos.unit || (pos.unit = unitFor(pos.stake));
@@ -1637,7 +1682,7 @@ function activityItems() {
       if (qty <= 0) return;
       const val = parseFloat(p.marketValue), pnl = parseFloat(p.unrealizedPnl);
       const settled = p.resolutionSide || md.resolutionSide;
-      out.push({ ticker: md.eventTicker, sym: p.symbol, outcome: p.outcome, title: md.eventName || p.symbol,
+      out.push({ ticker: md.eventTicker, sym: p.symbol, outcome: p.outcome, title: md.eventName || p.symbol, img: md.eventImageUrl || md.imageUrl,
                  a: `${p.outcome === "no" ? "No" : "Yes"} ${md.contractName || ""}`, av: isFinite(val) ? money(val) : "no bids",
                  b: `${qty.toFixed(2)} @ ${pct(parseFloat(p.avgPrice) || 0)}`, bv: isFinite(pnl) ? (pnl >= 0 ? "+" : "-") + money(Math.abs(pnl)) : "",
                  foot: settled ? (settled === p.outcome ? "Won, waiting to pay out" : "Lost") : "Open on Gemini",
@@ -1645,14 +1690,14 @@ function activityItems() {
     });
     else Object.keys(state.picks).forEach((k) => {
       const p = state.picks[k], parts = k.split("|");
-      out.push({ ticker: parts[0], idx: +parts[1], outcome: parts[2], title: p.title || parts[0], a: p.what || "", av: money(p.stake),
+      out.push({ ticker: parts[0], idx: +parts[1], outcome: parts[2], title: p.title || parts[0], img: p.img, a: p.what || "", av: money(p.stake),
                  b: "test money", bv: "", foot: "Open (test money)", color: parts[2] === "no" ? C.red : C.green });
     });
   } else if (a === "orders") {
     if (LIVE.on) {
       (LIVE.history || []).forEach((o) => {
         const md = o.contractMetadata || {}, f = parseFloat(o.filledQuantity) || 0, px = parseFloat(o.avgExecutionPrice || o.price) || 0;
-        out.push({ ticker: md.eventTicker, sym: o.symbol, outcome: o.outcome, title: md.eventName || o.symbol,
+        out.push({ ticker: md.eventTicker, sym: o.symbol, outcome: o.outcome, title: md.eventName || o.symbol, img: md.eventImageUrl || md.imageUrl,
                    a: `${o.side === "sell" ? "Sold" : "Bought"} ${o.outcome === "no" ? "No" : "Yes"}`, av: money(f * px),
                    b: `${f.toFixed(2)} @ ${pct(px)}`, bv: "", foot: `${o.status || ""}  ${o.createdAt ? shortTime(Date.parse(o.createdAt)) : ""}`,
                    color: o.side === "sell" ? C.red : C.green });
@@ -1693,7 +1738,8 @@ function refreshActivity() {
     card.m = null; card.livePulse = false;
     card.b.el.setAttribute("visible", !!it);
     if (!it) return;
-    card.title.setAttribute("value", trunc(it.title || "", 50));
+    card.title.object3D.position.x = setIcon(card.icon, it.img) ? -0.11 : -0.138;
+    card.title.setAttribute("value", trunc(it.title || "", 46));
     card.foot.setAttribute("value", it.foot || ""); card.foot.setAttribute("color", C.dim);
     [[it.a, it.av], [it.b, it.bv]].forEach(([name, val], k) => {
       const row = card.rows[k];

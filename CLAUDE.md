@@ -173,6 +173,10 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Brian re-pasted the worker and confirmed "it works" for the Activity tab, live balance and positions after reload.
 
+## Market pictures, Nov 17 (UNTESTED)
+- Gemini sends `imageUrl` per event (bitcoin, oil barrel) and per contract (generic team shoes for NBA, helmets for NFL, in team colors; not league logos). assets.gemini.com sends no CORS header, so WebGL cannot use them directly. New public worker route /img?u= (only https://assets.gemini.com/...) passes them through with CORS and a 1-day cache.
+- App: `iconEntry`/`iconMesh`/`setIcon` (texture cache `TEX`). Pictures on lobby cards, the board title, answer rows, and duel pills; Activity cards use the position's event picture. `SETTINGS.icons` turns them off. Images are AVIF or PNG (Quest browser decodes AVIF). Needs the worker re-pasted.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
