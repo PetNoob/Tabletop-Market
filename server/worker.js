@@ -21,6 +21,7 @@
      POST /v1/prediction-markets/order         place a buy or sell
      POST /v1/prediction-markets/positions     what the account holds
      POST /v1/balances                         how many dollars the account has
+     POST /v1/prediction-markets/orders/history  past orders, for the Activity tab
      GET  /v1/prediction-markets/terms/status  has the account accepted the terms
    ====================================================================== */
 
@@ -82,6 +83,8 @@ export default {
       }
 
       if (path === "/positions") return reply(await gemini(env, "POST", "/v1/prediction-markets/positions", {}));
+
+      if (path === "/history") return reply(await gemini(env, "POST", "/v1/prediction-markets/orders/history", { limit: 40 }));
 
       // the account's real US dollar balance, so the table shows what Gemini shows
       if (path === "/balance") {

@@ -836,20 +836,29 @@ function styleGlove(el) {
 function buildLobby(market) {
   const L = UI.lobby = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
   slab(L, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE });
-  label(L, "Markets", -0.308, 0.185, 0.006, 0.0115, C.text, "left");
+  UI.lTitle = label(L, "Markets", -0.308, 0.185, 0.006, 0.0115, C.text, "left");
+  // Activity: your positions, orders and history. Works after a reload, because positions come from Gemini (live) or are saved (test).
+  UI.actBtn = button(L, "Activity", -0.175, 0.185, 0.085, 0.026, () => toggleActivity(),
+                     { size: 0.0058, r: 0.013, color: C.panel, enabled: inLobby });
+  UI.actTabs = [["positions", "Positions"], ["orders", "Orders"], ["history", "History"]].map(([id, name], i) => {
+    const b = button(L, name, -0.2765 + i * 0.079, 0.15, 0.075, 0.026, () => { state.activity = id; state.page = 0; actLoad(); refresh(); },
+                     { size: 0.0052, r: 0.013, color: C.panel, enabled: () => inLobby() && !!state.activity });
+    b.id = id;
+    return b;
+  });
   UI.lStatus = label(L, "", 0.308, 0.185, 0.006, 0.0068, C.dim, "right");
   // 16 tabs in two rows; they are named once Gemini sends its list of categories
   for (let i = 0; i < 16; i++) {
     const tab = { name: "" };
     tab.b = button(L, "", -0.2765 + (i % 8) * 0.079, 0.15 - Math.floor(i / 8) * 0.031, 0.075, 0.026,
-                   () => selectCat(tab.name), { size: 0.0052, r: 0.013, color: C.panel, enabled: () => inLobby() && !!tab.name });
+                   () => selectCat(tab.name), { size: 0.0052, r: 0.013, color: C.panel, enabled: () => inLobby() && !!tab.name && !state.activity });
     TABS.push(tab);
   }
   for (let i = 0; i < 6; i++) {
     const x = -0.158 + (i % 2) * 0.316, y = 0.052 - Math.floor(i / 2) * 0.088;
     const card = { m: null };
-    const b = card.b = button(L, "", x, y, 0.30, 0.082, () => openMarket(card.m),
-                              { r: 0.014, enabled: () => inLobby() && !!card.m });
+    const b = card.b = button(L, "", x, y, 0.30, 0.082, () => (card.act ? openActivity(card.act) : openMarket(card.m)),
+                              { r: 0.014, enabled: () => inLobby() && (!!card.m || !!(card.act && card.act.ticker)) });
     card.title = label(b.el, "", -0.138, 0.032, b.tz, 0.0062, C.text, "left", 0.165, "top");
     card.foot  = label(b.el, "", -0.138, -0.029, b.tz, 0.0054, C.dim, "left");
     card.rows = [0.015, -0.015].map((ry) => ({
@@ -868,10 +877,12 @@ function buildLobby(market) {
                     { enabled: () => inLobby() && state.page < pageCount() - 1 });
 }
 const curStore = () => state.store[state.cat] || { markets: [], total: 0, loading: true, source: "loading" };
-const pageCount = () => Math.max(1, Math.ceil(Math.max(curStore().total, curStore().markets.length) / CARDS.length));
+const pageCount = () => Math.max(1, Math.ceil((state.activity ? activityItems().length :
+                                               Math.max(curStore().total, curStore().markets.length)) / CARDS.length));
 const visibleMarkets = () => curStore().markets.slice(state.page * CARDS.length, (state.page + 1) * CARDS.length);
 function turnedPage() {
   state.page = clamp(state.page, 0, pageCount() - 1);
+  if (state.activity) return refresh();
   const st = curStore();
   if ((state.page + 1) * CARDS.length > st.markets.length && st.markets.length < st.total) loadCat(state.cat, true);
   refresh(); last.cards = Date.now(); pollOptions(cardOptions());
@@ -1007,6 +1018,7 @@ function openMarket(m) {
   if (!m) return;
   stopSim();
   state.market = m; state.view = "market"; state.sel = null;
+  syncPicksFor(m);
   UI.courtLines.setAttribute("visible", !!m.court);
   UI.hoops.setAttribute("visible", !!m.hoops);
   showLegs(); lockFingers(); refresh();
@@ -1061,9 +1073,11 @@ function closePanel() { state.sel = null; UI.panel.setAttribute("visible", false
 function addPick(m, leg, cost, shares, ref) {
   const key = pickKey(m, leg), cur = state.picks[key] || { stake: 0, shares: 0 };
   state.balance = Math.round((state.balance - cost) * 100) / 100;
-  state.picks[key] = { stake: cur.stake + cost, shares: cur.shares + shares, unit: unitFor(cur.stake + cost) };
-  // lock the stake on Arc with a readable receipt (does nothing if Arc is not set up)
   const what = m.kind === "list" ? `${leg.name} on ${leg.o.name}` : leg.name;
+  state.picks[key] = { stake: cur.stake + cost, shares: cur.shares + shares, unit: unitFor(cur.stake + cost), title: m.title, what };
+  logActivity({ side: "Bought", title: m.title, what, amount: cost, price: legPrice(leg), ticker: m.ticker, ref });
+  saveTestState();
+  // lock the stake on Arc with a readable receipt (does nothing if Arc is not set up)
   arcLock(key, cost, legPrice(leg), `${m.title} | ${what} | ${pct(legPrice(leg))} | ${money(cost)}${ref ? " | " + ref : ""}`);
 }
 function panelNote(text) { state.note = text; refreshPanel(); }
@@ -1085,7 +1099,7 @@ function confirmPick() {
     LIVE.orders.push({ id: r.orderId, side: "buy", symbol: leg.o.sym, outcome: leg.side, filled, avg });
     if (filled <= 0) return panelNote("Order did not fill. Try again");
     addPick(m, leg, filled * avg, filled, "gemini order " + r.orderId);
-    setTimeout(liveBalance, 1500);
+    setTimeout(liveBalance, 1500); setTimeout(liveSync, 2500);
     closePanel();
   }).catch((err) => { LIVE.busy = false; console.warn("Gemini order:", err.message); panelNote(trunc("Gemini: " + err.message, 120)); });
 }
@@ -1120,7 +1134,8 @@ async function unlockLive(pass) {
   UI.balTitle.setAttribute("value", r.sandbox ? "Gemini balance (practice)" : "Gemini balance (REAL money)");
   UI.interest.setAttribute("value", "Orders up to " + money(LIVE.cap) + " each on Gemini");
   refresh();
-  liveBalance();
+  liveBalance(); liveSync();
+  if (!LIVE.syncTimer) LIVE.syncTimer = setInterval(() => { if (LIVE.on && !LIVE.busy) liveSync(); }, 15000);
   if (!LIVE.timer) LIVE.timer = setInterval(() => { if (LIVE.on && !LIVE.busy) liveBalance(); }, 5000);
   return r;
 }
@@ -1344,6 +1359,11 @@ function refreshPanel() {
   UI.knob.object3D.position.x = (clamp(state.amount / sliderMax(), 0, 1) - 0.5) * 0.29;
 }
 function refreshLobby() {
+  if (state.activity) return refreshActivity();
+  UI.lTitle.setAttribute("value", "Markets"); UI.actBtn.t.setAttribute("value", "Activity");
+  UI.actTabs.forEach((b) => b.el.setAttribute("visible", false));
+  UI.lHint.setAttribute("value", "% = the market's chance of that answer");
+  CARDS.forEach((card) => { card.act = null; });
   const st = curStore();
   state.page = clamp(state.page, 0, pageCount() - 1);
   UI.lStatus.setAttribute("value", st.loading ? "Loading from Gemini..." : st.source === "live" ? "Live from Gemini" : "Sample markets (Gemini unreachable)");
@@ -1490,6 +1510,9 @@ function grabBegin(i, frac, point) {
 function settleCash(i, frac, proceeds, ref) {
   const pile = PILES[i], p = pickAt(i);
   if (!p) return;
+  logActivity({ side: "Sold", title: p.pos.title || (state.market && state.market.title) || "", what: (p.pos.what || "") + " " + Math.max(1, Math.round(frac * 100)) + "%",
+                amount: proceeds, ticker: state.market && state.market.ticker, ref, sim: state.sim });
+  setTimeout(saveTestState, 0);
   // release the same share of the locked stake on Arc (does nothing if Arc is not set up)
   arcRelease(p.key, frac, `${state.market ? state.market.title : ""} | cash out ${Math.max(1, Math.round(frac * 100))}% | ` +
                           `${money(proceeds)}${state.sim ? " (simulated)" : ""}${ref ? " | " + ref : ""}`);
@@ -1517,7 +1540,7 @@ function grabDone(cashOut) {
     grab.pending = false;
     if (filled <= 0 || !now) { cashNote(i, "Could not sell right now"); pile.release(null); return endGrab(); }
     settleCash(i, Math.min(1, filled / now.pos.shares), filled * avg, "gemini order " + r.orderId);
-    setTimeout(liveBalance, 1500);
+    setTimeout(liveBalance, 1500); setTimeout(liveSync, 2500);
     endGrab();
   }).catch((err) => { grab.pending = false; console.warn("Gemini sell:", err.message); cashNote(i, trunc("Gemini: " + err.message, 120)); pile.release(null); endGrab(); });
 }
@@ -1542,6 +1565,155 @@ function pileClicked(i) {
   const now = performance.now();
   if (now < armed[i]) { armed[i] = 0; if (grabBegin(i, 1)) grabDone(true); }
   else { armed[i] = now + 3000; refresh(); setTimeout(refresh, 3100); }
+}
+
+/* ---------- Activity: positions, orders and history ----------
+   Live mode: positions and orders come from your Gemini account, so they survive a reload.
+   Test mode: picks, balance and a log are saved in this browser.
+   History: the receipts of every lock and release on Arc. */
+function logActivity(e) {
+  if (!state.log) state.log = [];
+  e.t = Date.now(); e.live = LIVE.on; state.log.push(e);
+  if (state.log.length > 80) state.log.shift();
+}
+function saveTestState() {
+  if (LIVE.on) return;
+  store.set("tm-test", JSON.stringify({ balance: state.balance, picks: state.picks, log: (state.log || []).filter((e) => !e.live).slice(-60) }));
+}
+function loadTestState() {
+  state.log = [];
+  try {
+    const s = JSON.parse(store.get("tm-test") || "null");
+    if (!s) return;
+    if (isFinite(s.balance)) state.balance = s.balance;
+    if (s.picks && typeof s.picks === "object") state.picks = s.picks;
+    if (Array.isArray(s.log)) state.log = s.log;
+  } catch (e) { console.warn("saved test money could not be read", e); }
+}
+// ask Gemini what the account holds; turn the positions for the open market into cash piles
+function liveSync() {
+  if (!LIVE.on) return Promise.resolve();
+  return serverCall("/positions", {}).then((r) => {
+    LIVE.positions = (r && r.positions) || [];
+    if (inMarket() && grab.i < 0) syncPicksFor(state.market);
+    refresh();
+  }).catch((err) => console.warn("Gemini positions:", err.message));
+}
+function liveHistory() {
+  if (!LIVE.on) return;
+  serverCall("/history", {}).then((r) => { LIVE.history = (r && r.orders) || []; refresh(); })
+    .catch((err) => { LIVE.history = []; LIVE.historyError = /Unknown path/.test(err.message) ? "Update the server code in Cloudflare to see orders" : err.message; refresh(); });
+}
+function syncPicksFor(m) {
+  if (!LIVE.on || !LIVE.positions || !m) return;
+  Object.keys(state.picks).forEach((k) => { if (k.split("|")[0] === m.ticker) delete state.picks[k]; });
+  LIVE.positions.forEach((p) => {
+    const md = p.contractMetadata || {}, qty = parseFloat(p.totalQuantity) || 0;
+    if (md.eventTicker !== m.ticker || qty <= 0) return;
+    let idx = m.opts.findIndex((o) => o.sym === p.symbol), side = p.outcome === "no" ? "no" : "yes";
+    if (idx < 0) return;
+    if (m.kind === "duel" && side === "no") { idx = 1 - idx; side = "yes"; }   // "No on one team" shown on the other team's pile
+    const key = `${m.ticker}|${idx}|${side}`, cur = state.picks[key], stake = qty * (parseFloat(p.avgPrice) || 0);
+    const total = (cur ? cur.stake : 0) + stake;
+    state.picks[key] = { stake: total, shares: (cur ? cur.shares : 0) + qty, unit: unitFor(total), title: m.title,
+                         what: m.kind === "list" ? `${side === "yes" ? "Yes" : "No"} on ${m.opts[idx].name}` : m.opts[idx].name };
+  });
+}
+function toggleActivity() {
+  state.activity = state.activity ? "" : "positions"; state.page = 0;
+  actLoad(); refresh();
+}
+function actLoad() {
+  if (!LIVE.on) return;
+  if (state.activity === "positions") liveSync();
+  if (state.activity === "orders") liveHistory();
+}
+const shortTime = (ms) => clean(new Date(ms).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }));
+function activityItems() {
+  const a = state.activity, out = [];
+  if (a === "positions") {
+    if (LIVE.on) (LIVE.positions || []).forEach((p) => {
+      const md = p.contractMetadata || {}, qty = parseFloat(p.totalQuantity) || 0;
+      if (qty <= 0) return;
+      const val = parseFloat(p.marketValue), pnl = parseFloat(p.unrealizedPnl);
+      const settled = p.resolutionSide || md.resolutionSide;
+      out.push({ ticker: md.eventTicker, sym: p.symbol, outcome: p.outcome, title: md.eventName || p.symbol,
+                 a: `${p.outcome === "no" ? "No" : "Yes"} ${md.contractName || ""}`, av: isFinite(val) ? money(val) : "no bids",
+                 b: `${qty.toFixed(2)} @ ${pct(parseFloat(p.avgPrice) || 0)}`, bv: isFinite(pnl) ? (pnl >= 0 ? "+" : "-") + money(Math.abs(pnl)) : "",
+                 foot: settled ? (settled === p.outcome ? "Won, waiting to pay out" : "Lost") : "Open on Gemini",
+                 color: p.outcome === "no" ? C.red : C.green });
+    });
+    else Object.keys(state.picks).forEach((k) => {
+      const p = state.picks[k], parts = k.split("|");
+      out.push({ ticker: parts[0], idx: +parts[1], outcome: parts[2], title: p.title || parts[0], a: p.what || "", av: money(p.stake),
+                 b: "test money", bv: "", foot: "Open (test money)", color: parts[2] === "no" ? C.red : C.green });
+    });
+  } else if (a === "orders") {
+    if (LIVE.on) {
+      (LIVE.history || []).forEach((o) => {
+        const md = o.contractMetadata || {}, f = parseFloat(o.filledQuantity) || 0, px = parseFloat(o.avgExecutionPrice || o.price) || 0;
+        out.push({ ticker: md.eventTicker, sym: o.symbol, outcome: o.outcome, title: md.eventName || o.symbol,
+                   a: `${o.side === "sell" ? "Sold" : "Bought"} ${o.outcome === "no" ? "No" : "Yes"}`, av: money(f * px),
+                   b: `${f.toFixed(2)} @ ${pct(px)}`, bv: "", foot: `${o.status || ""}  ${o.createdAt ? shortTime(Date.parse(o.createdAt)) : ""}`,
+                   color: o.side === "sell" ? C.red : C.green });
+      });
+      if (!out.length && LIVE.historyError) out.push({ title: LIVE.historyError, a: "", av: "", b: "", bv: "", foot: "", color: C.dim });
+    } else (state.log || []).slice().reverse().forEach((e) => {
+      out.push({ ticker: e.ticker, title: e.title, a: e.side + (e.sim ? " (sim)" : ""), av: money(e.amount || 0), b: trunc(e.what || "", 13), bv: "",
+                 foot: shortTime(e.t) + "  test money", color: e.side === "Sold" ? C.red : C.green });
+    });
+  } else if (a === "history") {
+    ARC.receipts.slice().reverse().forEach((r) => {
+      out.push({ title: r.text, a: r.kind === "lock" ? "Locked on Arc" : "Released", av: "", b: "", bv: "",
+                 foot: ({ done: "Confirmed on Arc", waiting: "Confirming...", sending: "Sending...", failed: "Failed", skipped: "Skipped" }[r.status] || r.status) +
+                       (r.t ? "  " + shortTime(r.t) : ""), color: r.kind === "lock" ? C.green : C.dim });
+    });
+  }
+  return out;
+}
+function refreshActivity() {
+  const items = activityItems();
+  state.page = clamp(state.page, 0, pageCount() - 1);
+  UI.lTitle.setAttribute("value", "Activity"); UI.actBtn.t.setAttribute("value", "Markets");
+  UI.lStatus.setAttribute("value", LIVE.on ? "Your Gemini account" : "Test money (saved in this browser)");
+  UI.lStatus.setAttribute("color", LIVE.on ? C.green : C.dim);
+  TABS.forEach((tab) => tab.b.el.setAttribute("visible", false));
+  UI.actTabs.forEach((b) => {
+    const on = b.id === state.activity;
+    b.el.setAttribute("visible", true); b.el.setColor(on ? C.keyOn : C.panel); b.t.setAttribute("color", on ? C.text : C.dim);
+  });
+  UI.lHint.setAttribute("value", state.activity === "history" ? "Every lock and release on Arc" : "Press one to open that market");
+  UI.lPage.setAttribute("value", pageCount() > 1 ? `${state.page + 1} / ${pageCount()}` : "");
+  UI.lPrev.el.setAttribute("visible", pageCount() > 1); UI.lNext.el.setAttribute("visible", pageCount() > 1);
+  const shown = items.slice(state.page * CARDS.length, (state.page + 1) * CARDS.length);
+  UI.lEmpty.setAttribute("value", shown.length ? "" : state.activity === "positions" ? "No open positions" :
+                                                    state.activity === "orders" ? "No orders yet" : "No receipts yet");
+  CARDS.forEach((card, i) => {
+    const it = card.act = shown[i] || null;
+    card.m = null; card.livePulse = false;
+    card.b.el.setAttribute("visible", !!it);
+    if (!it) return;
+    card.title.setAttribute("value", trunc(it.title || "", 50));
+    card.foot.setAttribute("value", it.foot || ""); card.foot.setAttribute("color", C.dim);
+    [[it.a, it.av], [it.b, it.bv]].forEach(([name, val], k) => {
+      const row = card.rows[k];
+      row.chip.setAttribute("visible", k === 0 && !!name); if (k === 0) row.chip.setColor(it.color || C.line);
+      row.name.setAttribute("value", trunc(name || "", 16)); row.pct.setAttribute("value", val || "");
+    });
+  });
+}
+// open the market an activity item belongs to, with its cash pile
+function openActivity(it) {
+  if (!it || !it.ticker || state.opening) return;
+  state.opening = true; UI.lEmpty.setAttribute("value", "Opening..."); CARDS.forEach((c) => c.b.el.setAttribute("visible", false));
+  getJSON(GEMINI + "/events/" + encodeURIComponent(it.ticker), 45000).then((e) => {
+    state.opening = false;
+    const m = toMarket(e && e.data && !e.ticker ? e.data : e);
+    if (!m) { refresh(); UI.lEmpty.setAttribute("value", "That market has closed"); return; }
+    let idx = it.sym ? m.opts.findIndex((o) => o.sym === it.sym) : it.idx;
+    if (m.kind === "list" && idx >= 0 && idx < m.opts.length) { m.sel = idx; m.rowPage = Math.floor(idx / ROWS.length); }
+    openMarket(m);
+  }).catch((err) => { state.opening = false; refresh(); UI.lEmpty.setAttribute("value", "Could not open: " + trunc(err.message, 40)); });
 }
 
 /* ---------- things that pulse: the graph's live dot and the red LIVE NOW words ---------- */
@@ -1822,6 +1994,7 @@ arcPanel.addEventListener("click", (ev) => {
   }
 });
 arcInit();
+loadTestState();
 
 if (scene.hasLoaded) build(); else scene.addEventListener("loaded", build);
 scene.addEventListener("enter-vr", () => { note.style.display = "none"; });

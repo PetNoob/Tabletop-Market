@@ -163,6 +163,14 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Faster: the graph's answers re-poll every 3 s (`gameRefreshSec` 3); all answers on the board every 9 s. Kept near Gemini's public limit (about 120 requests a minute).
 - "LIVE NOW" is red and pulses (text shader opacity uniform) on lobby cards and on the market board.
 
+## Activity tab and positions after reload, Nov 17 (UNTESTED)
+- Brian confirmed in the headset: a live PARTIAL cash-out sold on Gemini and worked. The live balance did not update because his Cloudflare worker was still the old code (the card said "update the server code").
+- He asked for an Activity tab because cash piles vanished after a reload. Built: an "Activity" button next to the lobby title toggles `state.activity` with sub-tabs Positions, Orders, History (cards reuse CARDS; `card.act`).
+- Live: `liveSync()` reads POST /v1/prediction-markets/positions (at unlock, every 15 s, 2.5 s after each order) into `LIVE.positions`; `syncPicksFor(m)` rebuilds `state.picks` for the open market from them, so piles come back after a reload. A duel "No" position is shown on the other team's pile. Orders = POST /v1/prediction-markets/orders/history via new server route /history.
+- Test mode: picks, balance and a log are saved in localStorage `tm-test` and restored on load.
+- History = Arc receipts. Pressing a position or order opens that market via GET /v1/prediction-markets/events/{eventTicker}.
+- Needs worker.js re-pasted into Cloudflare (adds /balance and /history).
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
