@@ -189,6 +189,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Odds ticker (Nov 17, UNTESTED): `tickerLabel`/`setTicker` give the lobby card odds, board answer odds, pill odds and Activity values a second text; on a change on the same market the old value slides out, the new slides in (up from below when rising), with a green or red flash (pills: slide and pulse only). `SETTINGS.oddsAnim` turns it off.
 
+- Odds wheels (Nov 17, UNTESTED, replaces the slide ticker): Brian wanted bike-lock style rolling. `tickerLabel` is now a group of per-character wheels (right-aligned, widths from CHAR_W). On a change on the same market, only changed digits turn, through the digits in between, upward for a rise and downward for a fall (tilted on a small drum, R = 0.85 x size), with a green or red flash. Pills: no flash. Each wheel has a second text created only when it first turns.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

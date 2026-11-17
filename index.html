@@ -677,43 +677,97 @@ const easeOut = (k) => 1 - Math.pow(1 - k, 3);
 const easeBack = (k) => { const c = 1.7; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2); };   // overshoots a little, then settles
 const span = (k, a, b) => clamp((k - a) / (b - a), 0, 1);
 
-/* ---------- numbers that roll when they change ----------
-   A ticker label is two texts in the same spot. When the value changes, the old one slides out and fades,
-   the new one slides in from below (going up) or above (going down), flashes green or red, and settles. */
+/* ---------- numbers that roll like a combination lock ----------
+   Each character is its own little wheel. When the number changes, only the digits that change turn,
+   and they turn through the digits in between (93% -> 95% turns the 3 through 4 to 5). Going up turns them
+   upward, going down turns them downward. The number flashes green or red while it turns. */
+const CHAR_W = (c) => (c === "." || c === "," ? 0.5 : c === "%" ? 1.25 : c === "-" ? 0.7 : c === " " ? 0.6 : 0.95);
 function tickerLabel(parent, x, y, z, size, color, align) {
-  const el = label(parent, "", x, y, z, size, color, align);
-  el.twin = label(parent, "", x, y, z, size, color, align);
-  el.tk = { y0: y, h: size * 1.7, base: color, text: "", key: "", flash: true };
+  const el = mk("a-entity", { position: `${x} ${y} ${z}` }, parent);           // always right-aligned at x
+  el.tk = { size, base: color, color, text: "", key: "", flash: true, slots: [] };
   return el;
 }
+function tkSlot(el, i) {
+  const tk = el.tk;
+  if (!tk.slots[i]) tk.slots[i] = { a: label(el, "", 0, 0, 0, tk.size, tk.color, "center"), b: null, x: 0 };
+  return tk.slots[i];
+}
+function tkSlotB(el, s) {
+  if (!s.b) { s.b = label(el, "", s.x, 0, 0, el.tk.size, el.tk.color, "center"); s.b.object3D.visible = false; }
+  return s.b;
+}
+function tkChar(txt, c) { if (txt.tkc !== c) { txt.tkc = c; txt.setAttribute("value", c); } }
+// put a character on the wheel at angle a (0 = facing you, positive = turned upward)
+function tkPlace(txt, a, R) {
+  const o = txt.object3D, v = Math.cos(a);
+  o.position.y = R * Math.sin(a); o.position.z = R * (v - 1); o.rotation.x = -a;
+  o.visible = v > 0.05;
+  setTextOpacity(txt, clamp(v * 1.25, 0, 1));
+}
+function tkColor(el, c) {
+  el.tk.color = c;
+  el.tk.slots.forEach((s) => { s.a.setAttribute("color", c); if (s.b) s.b.setAttribute("color", c); });
+}
+function setTickerColor(el, c) { el.tk.base = c; tkColor(el, c); }
 function setTicker(el, text, key, base) {
   const tk = el.tk;
   if (!tk) { el.setAttribute("value", text); return; }
   if (base) tk.base = base;
   if (text === tk.text && key === tk.key) return;
-  const oldText = tk.text, sameKey = key === tk.key && oldText !== "" && text !== "";
+  const old = tk.text, same = key === tk.key && old !== "" && text !== "";
   tk.text = text; tk.key = key;
-  el.setAttribute("value", text);
-  const num = (s) => parseFloat(String(s).replace(/[^0-9.\-]/g, ""));
-  const a = num(oldText), b = num(text);
-  if (!S.oddsAnim || !sameKey || !isFinite(a) || !isFinite(b) || a === b) {          // nothing to animate: just show it
+  const nc = String(text).split("").reverse(), oc = String(old).split("").reverse(), n = Math.max(nc.length, oc.length);
+  // lay the wheels out from the right, sized for the new number
+  let x = 0;
+  for (let i = 0; i < n; i++) {
+    const s = tkSlot(el, i), w = CHAR_W(nc[i] || " ") * tk.size;
+    s.x = -(x + w / 2); x += w;
+    s.a.object3D.position.x = s.x; if (s.b) s.b.object3D.position.x = s.x;
+  }
+  for (let i = n; i < tk.slots.length; i++) { tkChar(tk.slots[i].a, ""); if (tk.slots[i].b) tk.slots[i].b.object3D.visible = false; }
+  const R = tk.size * 0.85, num = (s) => parseFloat(String(s).replace(/[^0-9.\-]/g, ""));
+  const a = num(old), b = num(text);
+  const settle = () => {
+    for (let i = 0; i < n; i++) {
+      const s = tk.slots[i]; tkChar(s.a, nc[i] || ""); tkPlace(s.a, 0, R);
+      if (s.b) s.b.object3D.visible = false;
+    }
+    el.object3D.scale.set(1, 1, 1);
+  };
+  if (!S.oddsAnim || !same || !isFinite(a) || !isFinite(b) || a === b) {     // nothing to animate: just show it
     tween("tick" + el.object3D.uuid, 1, () => {});
-    el.twin.setAttribute("value", ""); el.object3D.position.y = tk.y0; el.object3D.scale.set(1, 1, 1);
-    el.setAttribute("color", tk.base); setTextOpacity(el, 1);
+    settle(); tkColor(el, tk.base);
     return;
   }
   const dir = b > a ? 1 : -1;
-  el.twin.setAttribute("value", oldText); el.twin.setAttribute("color", tk.base);
-  el.setAttribute("color", tk.flash ? (dir > 0 ? C.green : C.red) : tk.base);
-  tween("tick" + el.object3D.uuid, 520, (k) => {
-    const e = easeOut(k), s = 1 + 0.16 * Math.sin(Math.PI * k);
-    el.object3D.position.y = tk.y0 - dir * tk.h * (1 - e);
-    el.twin.object3D.position.y = tk.y0 + dir * tk.h * e;
-    setTextOpacity(el, e); setTextOpacity(el.twin, 1 - e);
-    el.object3D.scale.set(s, s, 1);
+  // the characters each wheel turns through
+  const seqs = [];
+  for (let i = 0; i < n; i++) {
+    const from = oc[i] || "", to = nc[i] || "", seq = [from];
+    if (from !== to) {
+      if (/^\d$/.test(from) && /^\d$/.test(to)) { let d = +from; while (d !== +to && seq.length < 11) { d = (d + dir + 10) % 10; seq.push(String(d)); } }
+      else seq.push(to);
+    }
+    seqs.push(seq);
+  }
+  if (tk.flash) tkColor(el, dir > 0 ? C.green : C.red);
+  const steps = Math.max.apply(null, seqs.map((q) => q.length - 1)), Q = Math.PI / 2;
+  tween("tick" + el.object3D.uuid, 360 + 80 * steps, (k) => {
+    const e = easeOut(k);
+    seqs.forEach((seq, i) => {
+      const s = tk.slots[i], m = seq.length - 1;
+      if (m === 0) { tkChar(s.a, seq[0]); tkPlace(s.a, 0, R); if (s.b) s.b.object3D.visible = false; return; }
+      const p = e * m, j = Math.min(Math.floor(p), m), f = p - j;
+      tkChar(s.a, seq[j]); tkPlace(s.a, dir * f * Q, R);                       // the digit turning away
+      const nb = tkSlotB(el, s);
+      if (j < m) { tkChar(nb, seq[j + 1]); tkPlace(nb, dir * (f - 1) * Q, R); }  // the next digit turning in
+      else nb.object3D.visible = false;
+    });
+    const sc = 1 + 0.1 * Math.sin(Math.PI * k);
+    el.object3D.scale.set(sc, sc, 1);
   }, () => {
-    el.twin.setAttribute("value", ""); el.object3D.scale.set(1, 1, 1); el.object3D.position.y = tk.y0; setTextOpacity(el, 1);
-    setTimeout(() => { if (tk.text === text) el.setAttribute("color", tk.base); }, 650);   // the flash fades back
+    settle();
+    setTimeout(() => { if (tk.text === text) tkColor(el, tk.base); }, 650);   // the flash fades back
   });
 }
 
@@ -1142,8 +1196,7 @@ function showLegs() {
   legs.forEach((leg, i) => {
     UI.pills[i].el.setColor(leg.color);
     const ink = inkFor(leg.color);
-    UI.pills[i].name.setAttribute("color", ink); UI.pills[i].pct.setAttribute("color", ink); UI.pills[i].pct.tk.base = ink;
-    UI.pills[i].pct.twin.setAttribute("color", ink);
+    UI.pills[i].name.setAttribute("color", ink); setTickerColor(UI.pills[i].pct, ink);
     UI["rim" + i].setAttribute("color", leg.color);
     PILES[i].clear();
   });
