@@ -87,7 +87,7 @@ const SETTINGS = {
   courtScale:   1.0,    // 1.0 = court is 60 cm long. 1.5 = bigger, 0.7 = smaller
   startBalance: 100,    // test balance in dollars
   interestRate: 4.1,    // shown on the balance card (preview only)
-  gameRefreshSec:  5,   // how often the market on the table re-checks its odds
+  gameRefreshSec:  3,   // how often the graph's answers re-check their odds (the other answers: every 3 times this)
   lobbyRefreshSec: 300, // how often a category's list of markets is downloaded again
   startCategory: "Sports",   // the tab that is open first
   springStiffness: 230, // how quickly it follows your hand. Lower = looser and floatier
@@ -657,34 +657,69 @@ function makePile(parent, x, z) {
 /* ---------- the price graph ---------- */
 function makeGraph(parent, x, y, w, h) {
   const holder = mk("a-entity", { position: `${x} ${y} 0.005` }, parent);
-  slab(holder, w, h, 0.003, C.base, { r: 0.014, order: 1, opacity: 0.9 });
+  slab(holder, w, h, 0.003, C.base, { r: 0.014, order: 1, opacity: 0.55 });       // see-through background
   const g = new THREE.Group(); g.position.z = 0.0035; holder.object3D.add(g);
-  const x0 = -w / 2 + 0.014, x1 = w / 2 - 0.042, y0 = -h / 2 + 0.018, y1 = h / 2 - 0.034, MAXP = 140, TH = 0.0022;
-  const gridMat = new THREE.MeshBasicMaterial({ color: 0x30353c });
-  [0, 0.5, 1].forEach((k) => {
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, 0.0006), gridMat);
-    m.position.set((x0 + x1) / 2, y0 + (y1 - y0) * k, 0); g.add(m);
+  const x0 = -w / 2 + 0.014, x1 = w / 2 - 0.042, y0 = -h / 2 + 0.03, y1 = h / 2 - 0.034, MAXP = 140, TH = 0.0024;
+  // gridlines: 5 across, 4 down
+  const gridMat = new THREE.MeshBasicMaterial({ color: 0x3a4049, transparent: true, opacity: 0.55, depthWrite: false });
+  [0, 0.25, 0.5, 0.75, 1].forEach((k) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, 0.0005), gridMat);
+    m.position.set((x0 + x1) / 2, y0 + (y1 - y0) * k, 0); m.renderOrder = 2; g.add(m);
   });
+  [0, 1 / 3, 2 / 3, 1].forEach((k) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(0.0005, y1 - y0), gridMat);
+    m.position.set(x0 + (x1 - x0) * k, (y0 + y1) / 2, 0); m.renderOrder = 2; g.add(m);
+  });
+  const glowTex = (() => {                                                       // soft round glow for the live dot
+    const cv = document.createElement("canvas"); cv.width = cv.height = 64;
+    const c2 = cv.getContext("2d"), gr = c2.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, "rgba(255,255,255,1)"); gr.addColorStop(0.35, "rgba(255,255,255,0.55)"); gr.addColorStop(1, "rgba(255,255,255,0)");
+    c2.fillStyle = gr; c2.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(cv);
+  })();
   const lines = [0, 1].map(() => {
     const pos = new Float32Array((MAXP - 1) * 18), geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-    const mesh = new THREE.Mesh(geo, mat); mesh.frustumCulled = false; mesh.position.z = 0.0006; g.add(mesh);
-    const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0042, 16), mat); dot.position.z = 0.0012; g.add(dot);
-    return { pos, geo, mat, mesh, dot };
+    const mesh = new THREE.Mesh(geo, mat); mesh.frustumCulled = false; mesh.position.z = 0.0008; mesh.renderOrder = 4; g.add(mesh);
+    // a faint fill under the line
+    const fpos = new Float32Array((MAXP - 1) * 18), fgeo = new THREE.BufferGeometry();
+    fgeo.setAttribute("position", new THREE.BufferAttribute(fpos, 3));
+    const fmat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide });
+    const fill = new THREE.Mesh(fgeo, fmat); fill.frustumCulled = false; fill.position.z = 0.0004; fill.renderOrder = 3; g.add(fill);
+    // the dot at the latest price, with a pulsing glow behind it
+    const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0038, 20), mat); dot.position.z = 0.0016; dot.renderOrder = 6; g.add(dot);
+    const gmat = new THREE.MeshBasicMaterial({ map: glowTex, color: 0xffffff, transparent: true, opacity: 0.6, depthWrite: false,
+                                               blending: THREE.AdditiveBlending });
+    const glow = new THREE.Mesh(new THREE.PlaneGeometry(0.026, 0.026), gmat); glow.position.z = 0.0012; glow.renderOrder = 5; g.add(glow);
+    return { pos, geo, mat, mesh, fpos, fgeo, fmat, fill, dot, glow, gmat };
   });
   const cap = label(holder, "", -w / 2 + 0.014, h / 2 - 0.016, 0.004, 0.0056, C.dim, "left");
   const hi = label(holder, "", w / 2 - 0.008, y1, 0.004, 0.0056, C.dim, "right");
   const mid = label(holder, "", w / 2 - 0.008, (y0 + y1) / 2, 0.004, 0.0056, C.dim, "right");
   const lo = label(holder, "", w / 2 - 0.008, y0, 0.004, 0.0056, C.dim, "right");
+  // time stamps along the bottom
+  const tl = label(holder, "", x0, y0 - 0.013, 0.004, 0.0052, C.dim, "left");
+  const tm = label(holder, "", (x0 + x1) / 2, y0 - 0.013, 0.004, 0.0052, C.dim);
+  const tr = label(holder, "", x1, y0 - 0.013, 0.004, 0.0052, C.dim, "right");
+  const clock = (ms) => clean(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
   return {
+    // the dot breathes and its glow pulses outward, about once a second
+    pulse: function (now) {
+      const k = (now % 1400) / 1400, s = 1 + 0.12 * Math.sin(now / 220);
+      lines.forEach((L) => {
+        if (!L.dot.visible) return;
+        L.dot.scale.setScalar(s);
+        L.glow.scale.setScalar(0.7 + 1.1 * k); L.gmat.opacity = 0.75 * (1 - k);
+      });
+    },
     // series = [{ color, pts: [{t, p}] }], at most two
     set: function (series, caption) {
       cap.setAttribute("value", caption || "");
       const all = [].concat.apply([], series.map((s) => s.pts));
       if (all.length < 1) {
-        lines.forEach((L) => { L.mesh.visible = false; L.dot.visible = false; });
-        [hi, mid, lo].forEach((t) => t.setAttribute("value", ""));
+        lines.forEach((L) => { L.mesh.visible = L.fill.visible = L.dot.visible = L.glow.visible = false; });
+        [hi, mid, lo, tl, tm, tr].forEach((x) => x.setAttribute("value", ""));
         return;
       }
       let pMin = Math.min.apply(null, all.map((q) => q.p)), pMax = Math.max.apply(null, all.map((q) => q.p));
@@ -692,9 +727,12 @@ function makeGraph(parent, x, y, w, h) {
       pMin = Math.max(0, c - span / 2); pMax = Math.min(1, pMin + span); pMin = Math.max(0, pMax - span);
       const tMin = Math.min.apply(null, all.map((q) => q.t)), tMax = Math.max.apply(null, all.map((q) => q.t));
       hi.setAttribute("value", pct(pMax)); lo.setAttribute("value", pct(pMin)); mid.setAttribute("value", pct((pMin + pMax) / 2));
+      const timed = tMax - tMin > 60000;
+      tl.setAttribute("value", timed ? clock(tMin) : ""); tm.setAttribute("value", timed ? clock((tMin + tMax) / 2) : "");
+      tr.setAttribute("value", timed ? "Now" : "");
       lines.forEach((L, i) => {
         const s = series[i];
-        if (!s || !s.pts.length) { L.mesh.visible = false; L.dot.visible = false; return; }
+        if (!s || !s.pts.length) { L.mesh.visible = L.fill.visible = L.dot.visible = L.glow.visible = false; return; }
         let pts = s.pts;
         if (pts.length > MAXP) { const k = pts.length / MAXP; pts = Array.from({ length: MAXP }, (_, j) => s.pts[Math.min(s.pts.length - 1, Math.round((j + 1) * k) - 1)]); }
         if (pts.length === 1) pts = [{ t: tMin - 1, p: pts[0].p }, pts[0]];
@@ -706,13 +744,15 @@ function makeGraph(parent, x, y, w, h) {
           const len = Math.hypot(bx - ax, by - ay) || 1e-6, nx = -(by - ay) / len * TH / 2, ny = (bx - ax) / len * TH / 2;
           L.pos.set([ax + nx, ay + ny, 0, ax - nx, ay - ny, 0, bx + nx, by + ny, 0,
                      bx + nx, by + ny, 0, ax - nx, ay - ny, 0, bx - nx, by - ny, 0], n * 18);
+          L.fpos.set([ax, ay, 0, ax, y0, 0, bx, by, 0, bx, by, 0, ax, y0, 0, bx, y0, 0], n * 18);
           n++;
         }
         L.geo.attributes.position.needsUpdate = true; L.geo.setDrawRange(0, n * 6);
-        L.mat.color.set(s.color);
+        L.fgeo.attributes.position.needsUpdate = true; L.fgeo.setDrawRange(0, n * 6);
+        L.mat.color.set(s.color); L.fmat.color.set(s.color); L.gmat.color.set(s.color);
         const end = pts[pts.length - 1];
-        L.dot.position.x = X(end); L.dot.position.y = Y(end);
-        L.mesh.visible = true; L.dot.visible = true;
+        L.dot.position.x = L.glow.position.x = X(end); L.dot.position.y = L.glow.position.y = Y(end);
+        L.mesh.visible = L.fill.visible = L.dot.visible = L.glow.visible = true;
       });
     }
   };
@@ -1159,7 +1199,7 @@ async function getJSON(url, ms) {
     return await r.json();
   } finally { clearTimeout(timer); }
 }
-const last = { cards: 0, game: 0 };
+const last = { cards: 0, game: 0, graph: 0 };
 // 1) the list of categories, for the tabs
 async function loadCats() {
   let cats = [];
@@ -1236,7 +1276,8 @@ function dataTick() {
   if (state.sim) return;
   const now = Date.now(), st = state.store[state.cat];
   if (inMarket()) {
-    if (now - last.game >= S.gameRefreshSec * 1000) { last.game = now; pollOptions(viewOptions(), state.market); }
+    if (now - last.game >= S.gameRefreshSec * 3000) { last.game = now; last.graph = now; pollOptions(viewOptions(), state.market); }
+    else if (now - last.graph >= S.gameRefreshSec * 1000) { last.graph = now; pollOptions(graphOptions(), state.market); }
     return;
   }
   if (!st || st.loading) return;
@@ -1318,7 +1359,8 @@ function refreshLobby() {
     card.title.setAttribute("value", trunc(m.title, 50));
     const mine = stakedOn(m), live = m.sport && m.live;
     card.foot.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : whenText(m));
-    card.foot.setAttribute("color", mine > 0 || live ? C.green : C.dim);
+    card.foot.setAttribute("color", mine > 0 ? C.green : live ? C.red : C.dim);
+    card.livePulse = live && !(mine > 0);
     card.rows.forEach((row, k) => {
       const o = m.opts[k];
       row.chip.setAttribute("visible", !!o);
@@ -1331,7 +1373,8 @@ function refreshMarket() {
   const m = state.market, legs = legsOf(m), now = performance.now(), live = curStore().source === "live" && !m.sample;
   UI.title.setAttribute("value", trunc(m.title, 120));
   UI.when.setAttribute("value", whenText(m));
-  UI.when.setAttribute("color", m.sport && m.live ? C.green : C.dim);
+  UI.when.setAttribute("color", m.sport && m.live ? C.red : C.dim);
+  UI.whenLive = !!(m.sport && m.live);
   UI.status.setAttribute("value", state.sim ? "Simulated odds (demo, not real)" : LIVE.on ? "LIVE: real orders on Gemini" :
                                   live ? "Live odds from Gemini" : "Sample odds");
   UI.status.setAttribute("color", !state.sim && live ? C.green : C.dim);
@@ -1495,13 +1538,25 @@ function pileClicked(i) {
   else { armed[i] = now + 3000; refresh(); setTimeout(refresh, 3100); }
 }
 
+/* ---------- things that pulse: the graph's live dot and the red LIVE NOW words ---------- */
+function setTextOpacity(el, v) {
+  const tx = el && el.components && el.components.text;
+  if (tx && tx.material && tx.material.uniforms && tx.material.uniforms.opacity) tx.material.uniforms.opacity.value = v;
+}
+function stepPulse(now) {
+  if (UI.graph && inMarket()) UI.graph.pulse(now);
+  const v = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(now / 260));
+  if (inMarket()) setTextOpacity(UI.when, UI.whenLive ? v : 1);
+  else CARDS.forEach((card) => setTextOpacity(card.foot, card.livePulse ? v : 1));
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
   state, press, openMarket, backToLobby, phys, shove,
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepPhysics(now); stepGrab(); PILES.forEach((p) => p.update(now)); },
+  frame: (now) => { stepPhysics(now); stepGrab(); PILES.forEach((p) => p.update(now)); stepPulse(now); },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
   hoverAt: (point, ray) => {

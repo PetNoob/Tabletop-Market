@@ -158,6 +158,11 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Brian noticed the live table balance did not match Gemini. Added server route /balance (POST /v1/balances, USD "available") and `liveBalance()` in the app: called at unlock, 1.5 s after each live buy or sell, and every 20 s. The card title is now "Gemini balance (REAL money)". Needs the updated worker.js pasted into Cloudflare. Not tested.
 
+## Graph restyle and red LIVE NOW, Nov 17 (UNTESTED)
+- Graph: 55 percent see-through background, 5 horizontal and 4 vertical gridlines, a faint fill under each line, time stamps along the bottom (start, middle, "Now"), and a dot with a pulsing additive glow (`graph.pulse(now)` from `stepPulse`).
+- Faster: the graph's answers re-poll every 3 s (`gameRefreshSec` 3); all answers on the board every 9 s. Kept near Gemini's public limit (about 120 requests a minute).
+- "LIVE NOW" is red and pulses (text shader opacity uniform) on lobby cards and on the market board.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
