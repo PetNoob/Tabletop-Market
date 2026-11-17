@@ -152,6 +152,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Next live attempt gave "invalid api key" from Gemini. Likely the Cloudflare secret holds the deleted old key, or key/secret were swapped. Brian told to make a fresh key and replace both values. Unlock now fails with Gemini's message if the terms-status call is rejected.
 
+- Nov 17: the "invalid api key" was a typo (0 vs O) in the Cloudflare value. After fixing it, unlock worked and a $1 live buy reached Gemini, which answered "insufficient funds". The full signed order path is confirmed working; the account needs a USD deposit.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
