@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tabletop Market</title>
 <script src="https://aframe.io/releases/1.6.0/aframe.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js" integrity="sha384-6Zl0Pc8zjSz8KvmNeXRvUQgY4ryFb+BwDvKCmLYcBME0joAaru491tQgi9B7zsMM" crossorigin="anonymous"></script>
 <style>
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #0f1114; }
   #note { position: fixed; left: 12px; top: 12px; z-index: 10; background: rgba(20,22,26,.92);
@@ -34,6 +35,15 @@
   #windowBtn:hover { color: #f2f4f7; border-color: #4d535d; }
   #liveBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 8px; margin-top: 6px; }
   #liveBtn.on { color: #2fbf71; }
+  #arcBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 6px; margin-top: 0; }
+  #arcPanel { text-align: left; font-size: 12.5px; color: #c9cfd6; background: #15171a; border: 1px solid #2c3037;
+              border-radius: 10px; padding: 12px 14px; margin-top: 6px; max-height: 42vh; overflow: auto; line-height: 1.5; }
+  #arcPanel a { color: #2fbf71; }
+  #arcPanel .row { margin-bottom: 9px; }
+  #arcPanel .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; word-break: break-all; }
+  #arcPanel button { width: auto; display: inline-block; background: #2b2f36; color: #f2f4f7; border: 0; border-radius: 7px;
+                     font-size: 12px; padding: 4px 10px; margin: 4px 8px 0 0; }
+  #arcPanel .r { font-size: 11.5px; color: #8d95a0; border-top: 1px solid #23262b; padding-top: 5px; margin-top: 5px; }
   #wStatus { font-size: 13px; color: #8d95a0; margin: 22px 0 6px; min-height: 18px; }
   #wStatus.live { color: #2fbf71; }
   #welcome .fine { font-size: 12px; color: #6f7782; line-height: 1.5; margin: 0; }
@@ -51,9 +61,12 @@
     <button id="enterBtn">Enter</button>
     <button id="windowBtn">View on this screen instead</button>
     <button id="liveBtn" style="display:none">Owner: turn on live trading</button>
+    <button id="arcBtn">Blockchain setup</button>
+    <div id="arcPanel" style="display:none"></div>
     <p id="wStatus">Loading markets from Gemini...</p>
     <p class="fine">Demo with test money only. No real money is used or paid out.<br>
-       Every market and price comes from Gemini prediction markets.</p>
+       Every market and price comes from Gemini prediction markets.<br>
+       Each pick's stake is locked in a contract on Arc's practice network.</p>
   </div>
 </div>
 
@@ -83,6 +96,13 @@ const SETTINGS = {
   grabReach: 0.10,      // how far out to the side of the cash heap (meters) a pinch still counts
   cashRange: 0.16,      // hand height (meters) above the table where the cash-out amount reads 1%. At the table it reads 100%
   serverUrl: "",        // address of the private server (server/worker.js). Empty = test money only, no real trades
+  arc: {                // Arc practice network (testnet): free test money only. See "Blockchain setup" on the welcome screen
+    rpc: "https://rpc.testnet.arc.io",
+    chainId: 5042002,
+    explorer: "https://explorer.testnet.arc.io",
+    escrow: "",         // address of the deployed TabletopEscrow contract. Empty = use the one deployed from this browser, if any
+    dollarsToUsdc: 0.01 // each app dollar locks this much test USDC (the faucet only gives 10 per hour)
+  },
   liveBudget: 10,       // live mode only: how many real dollars this session may spend in total
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
@@ -722,6 +742,7 @@ function build() {
   UI.balTitle = label(bal, "Test balance", 0, 0.029, 0.006, 0.0062, C.dim);
   UI.balance = label(bal, "", 0, 0.003, 0.006, 0.017, C.text);
   UI.interest = label(bal, `Earning ${S.interestRate}% while idle (preview)`, 0, -0.027, 0.006, 0.0052, C.green);
+  UI.arcLine = label(bal, "", 0, -0.058, 0.006, 0.0048, C.dim);
 
   // handle to move everything (always there)
   UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 -0.006 0.305", rot: "-90 0 0", cls: "clickable" });
@@ -994,10 +1015,13 @@ function openPanel(i) {
   lockFingers(); refresh();
 }
 function closePanel() { state.sel = null; UI.panel.setAttribute("visible", false); lockFingers(); refresh(); }
-function addPick(m, leg, cost, shares) {
+function addPick(m, leg, cost, shares, ref) {
   const key = pickKey(m, leg), cur = state.picks[key] || { stake: 0, shares: 0 };
   state.balance = Math.round((state.balance - cost) * 100) / 100;
   state.picks[key] = { stake: cur.stake + cost, shares: cur.shares + shares, unit: unitFor(cur.stake + cost) };
+  // lock the stake on Arc with a readable receipt (does nothing if Arc is not set up)
+  const what = m.kind === "list" ? `${leg.name} on ${leg.o.name}` : leg.name;
+  arcLock(key, cost, legPrice(leg), `${m.title} | ${what} | ${pct(legPrice(leg))} | ${money(cost)}${ref ? " | " + ref : ""}`);
 }
 function panelNote(text) { state.note = text; refreshPanel(); }
 function confirmPick() {
@@ -1016,7 +1040,7 @@ function confirmPick() {
     const filled = parseFloat(r.filledQuantity) || 0, avg = parseFloat(r.avgExecutionPrice) || price;
     LIVE.orders.push({ id: r.orderId, side: "buy", symbol: leg.o.sym, outcome: leg.side, filled, avg });
     if (filled <= 0) return panelNote("Order did not fill. Try again");
-    addPick(m, leg, filled * avg, filled);
+    addPick(m, leg, filled * avg, filled, "gemini order " + r.orderId);
     closePanel();
   }).catch((err) => { LIVE.busy = false; panelNote(trunc("Gemini: " + err.message, 38)); });
 }
@@ -1394,9 +1418,12 @@ function grabBegin(i, frac, point) {
   return true;
 }
 // the share `frac` of pick i has been sold for `proceeds` dollars: pay it in and shrink the pick
-function settleCash(i, frac, proceeds) {
+function settleCash(i, frac, proceeds, ref) {
   const pile = PILES[i], p = pickAt(i);
   if (!p) return;
+  // release the same share of the locked stake on Arc (does nothing if Arc is not set up)
+  arcRelease(p.key, frac, `${state.market ? state.market.title : ""} | cash out ${Math.max(1, Math.round(frac * 100))}% | ` +
+                          `${money(proceeds)}${state.sim ? " (simulated)" : ""}${ref ? " | " + ref : ""}`);
   state.balance = Math.round((state.balance + proceeds) * 100) / 100;
   if (frac > 0.995) delete state.picks[p.key];
   else { p.pos.shares *= 1 - frac; p.pos.stake *= 1 - frac; }                 // the rest of the pick stays on the table
@@ -1420,7 +1447,7 @@ function grabDone(cashOut) {
     LIVE.orders.push({ id: r.orderId, side: "sell", symbol: leg.o.sym, outcome: leg.side, filled, avg });
     grab.pending = false;
     if (filled <= 0 || !now) { cashNote(i, "Could not sell right now"); pile.release(null); return endGrab(); }
-    settleCash(i, Math.min(1, filled / now.pos.shares), filled * avg);
+    settleCash(i, Math.min(1, filled / now.pos.shares), filled * avg, "gemini order " + r.orderId);
     endGrab();
   }).catch((err) => { grab.pending = false; cashNote(i, trunc("Gemini: " + err.message, 38)); pile.release(null); endGrab(); });
 }
@@ -1542,6 +1569,177 @@ liveBtn.addEventListener("click", () => {
     liveBtn.textContent = (r.sandbox ? "Live trading ON (practice site)" : "Live trading ON: real money") + ", max " + money(LIVE.cap) + " per order";
   }).catch((err) => { LIVE.on = false; LIVE.pass = ""; liveBtn.textContent = "Not unlocked: " + err.message; });
 });
+
+/* ---------- Arc: every pick's stake is locked onchain ----------
+   This browser gets its own wallet on Arc's practice network (testnet). Its key is kept in this browser
+   (localStorage), so it must only ever hold free test money: the page is public.
+   Pick      -> sends a share of test USDC to the escrow contract (contracts/TabletopEscrow.sol) with a receipt.
+   Cash out  -> the contract sends that share of the locked USDC back.
+   If Arc is not set up, or a transaction fails, the app keeps working and the receipt shows what happened. */
+const ARC = { ok: false, wallet: null, provider: null, escrow: null, receipts: [], queue: Promise.resolve(),
+              pending: 0, balance: null, deployMsg: "", deploying: false };
+const ESCROW_ABI = [
+  "function placePick(bytes32 key, uint32 oddsBps, string receipt) payable",
+  "function cashOut(bytes32 key, uint32 shareBps, string receipt)",
+  "function lockedOf(address user, bytes32 key) view returns (uint256)",
+  "function totalLocked() view returns (uint256)"
+];
+const SOLC_URL = "https://binaries.soliditylang.org/bin/soljson-v0.8.26+commit.8a97fa7a.js";
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const store = { get: (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+                set: (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} } };
+function arcInit() {
+  if (typeof ethers === "undefined") { console.warn("Arc: the wallet library did not load"); return; }
+  try {
+    ARC.provider = new ethers.JsonRpcProvider(S.arc.rpc, S.arc.chainId, { staticNetwork: true });
+    const saved = store.get("tm-arc-key");
+    const w = saved ? new ethers.Wallet(saved) : ethers.Wallet.createRandom();
+    if (!saved) store.set("tm-arc-key", w.privateKey);
+    ARC.wallet = w.connect(ARC.provider);
+    const addr = S.arc.escrow || store.get("tm-arc-escrow") || "";
+    if (addr) ARC.escrow = new ethers.Contract(addr, ESCROW_ABI, ARC.wallet);
+    try { ARC.receipts = JSON.parse(store.get("tm-arc-receipts") || "[]"); } catch (e) { ARC.receipts = []; }
+    ARC.receipts.forEach((r) => { if (r.status === "sending" || r.status === "waiting") r.status = r.hash ? "sent" : "not sent"; });
+    ARC.ok = true;
+    arcRefreshBalance();
+  } catch (err) { console.warn("Arc:", err); }
+}
+function arcRefreshBalance() {
+  if (!ARC.ok) return;
+  ARC.provider.getBalance(ARC.wallet.address)
+    .then((b) => { ARC.balance = parseFloat(ethers.formatEther(b)); arcShow(); })
+    .catch((err) => { console.warn("Arc balance:", err); arcShow(); });
+}
+function arcSaveReceipts() { store.set("tm-arc-receipts", JSON.stringify(ARC.receipts.slice(-30))); }
+// one transaction at a time, in order, so they never trip over each other
+function arcSend(kind, text, needUsdc, makeTx) {
+  if (!ARC.ok || !ARC.escrow) return;
+  const r = { kind, text: trunc(clean(text), 90), hash: "", status: "sending", t: Date.now() };
+  ARC.receipts.push(r);
+  if (needUsdc && ARC.balance !== null && ARC.balance < needUsdc + 0.005) {
+    r.status = "skipped"; r.error = "wallet needs test USDC"; arcSaveReceipts(); arcShow(); return;
+  }
+  ARC.pending++; arcSaveReceipts(); arcShow();
+  ARC.queue = ARC.queue.then(async () => {
+    try {
+      const tx = await makeTx();
+      r.hash = tx.hash; r.status = "waiting"; arcShow();
+      const done = await tx.wait();
+      r.status = done && done.status === 1 ? "done" : "failed";
+    } catch (err) {
+      r.status = "failed"; r.error = trunc(String((err && (err.shortMessage || err.message)) || err), 80);
+      console.warn("Arc " + kind + ":", err);
+    }
+    ARC.pending--; arcSaveReceipts(); arcShow(); arcRefreshBalance();
+  });
+}
+function arcLock(pickKeyText, dollars, odds, text) {
+  const usdc = Math.round(dollars * S.arc.dollarsToUsdc * 1e6) / 1e6;
+  if (!(usdc > 0)) return;
+  arcSend("lock", text, usdc, () => ARC.escrow.placePick(ethers.id(pickKeyText), Math.round(clamp(odds, 0.01, 0.99) * 10000),
+                                                         clean(text).slice(0, 90), { value: ethers.parseEther(usdc.toFixed(6)) }));
+}
+function arcRelease(pickKeyText, frac, text) {
+  const bps = clamp(Math.round(frac * 10000), 1, 10000);
+  arcSend("release", text, 0, () => ARC.escrow.cashOut(ethers.id(pickKeyText), bps, clean(text).slice(0, 90)));
+}
+// compile contracts/TabletopEscrow.sol in a background worker (the compiler is about 8 MB), then deploy it
+function compileSol(source) {
+  return new Promise((resolve, reject) => {
+    const code = "importScripts(" + JSON.stringify(SOLC_URL) + ");\n" +
+      "onmessage = function (e) {\n" +
+      "  function go() { try { var c = Module.cwrap('solidity_compile', 'string', ['string', 'number', 'number']);\n" +
+      "    postMessage({ out: c(e.data, 0, 0) }); } catch (err) { postMessage({ err: String(err) }); } }\n" +
+      "  if (Module.calledRun) go(); else Module.onRuntimeInitialized = go;\n" +
+      "};";
+    const url = URL.createObjectURL(new Blob([code], { type: "text/javascript" }));
+    const wk = new Worker(url);
+    const stop = (fn, v) => { clearTimeout(timer); wk.terminate(); URL.revokeObjectURL(url); fn(v); };
+    const timer = setTimeout(() => stop(reject, new Error("the compiler took too long")), 180000);
+    wk.onerror = (e) => stop(reject, new Error("compiler failed to load: " + (e.message || "unknown")));
+    wk.onmessage = (e) => {
+      if (e.data.err) return stop(reject, new Error(e.data.err));
+      try { stop(resolve, JSON.parse(e.data.out)); } catch (err) { stop(reject, err); }
+    };
+    wk.postMessage(JSON.stringify({
+      language: "Solidity", sources: { "TabletopEscrow.sol": { content: source } },
+      settings: { optimizer: { enabled: true, runs: 200 }, evmVersion: "paris",
+                  outputSelection: { "*": { "*": ["abi", "evm.bytecode.object"] } } }
+    }));
+  });
+}
+async function arcDeploy() {
+  if (!ARC.ok) throw new Error("Arc did not start in this browser");
+  if (ARC.balance === null) throw new Error("still checking the balance, try again in a moment");
+  if (ARC.balance < 0.05) throw new Error("add test USDC to this wallet first (link above)");
+  ARC.deployMsg = "Downloading the compiler (about 8 MB)..."; arcShow();
+  const res = await fetch("contracts/TabletopEscrow.sol", { cache: "no-store" });
+  if (!res.ok) throw new Error("contract file not found");
+  const out = await compileSol(await res.text());
+  const errs = (out.errors || []).filter((e) => e.severity === "error");
+  const c = out.contracts && out.contracts["TabletopEscrow.sol"] && out.contracts["TabletopEscrow.sol"].TabletopEscrow;
+  if (errs.length || !c) throw new Error(errs.length ? errs[0].formattedMessage : "the compiler produced nothing");
+  ARC.deployMsg = "Sending the contract to Arc..."; arcShow();
+  const ct = await new ethers.ContractFactory(c.abi, "0x" + c.evm.bytecode.object, ARC.wallet).deploy();
+  ARC.deployMsg = "Waiting for Arc to confirm..."; arcShow();
+  await ct.waitForDeployment();
+  const addr = await ct.getAddress();
+  store.set("tm-arc-escrow", addr);
+  ARC.escrow = new ethers.Contract(addr, ESCROW_ABI, ARC.wallet);
+  ARC.deployMsg = "Deployed. Copy the contract address below and send it to Claude.";
+  arcRefreshBalance();
+}
+function copyText(s) {
+  (navigator.clipboard ? navigator.clipboard.writeText(s) : Promise.reject(new Error("no clipboard")))
+    .catch(() => window.prompt("Copy this:", s));
+}
+function arcShow() {
+  if (UI.arcLine) {
+    const done = ARC.receipts.filter((r) => r.status === "done").length;
+    UI.arcLine.setAttribute("value", !ARC.ok || !ARC.escrow ? "" :
+      `Secured on Arc: ${done} receipt${done === 1 ? "" : "s"}${ARC.pending ? "  (saving...)" : ""}`);
+  }
+  const el = document.getElementById("arcPanel");
+  if (!el || el.style.display === "none") return;
+  if (!ARC.ok) { el.innerHTML = "Arc could not start in this browser (the wallet library did not load)."; return; }
+  const ex = S.arc.explorer, a = ARC.wallet.address, e = ARC.escrow ? ARC.escrow.target : "";
+  let h = `<div class="row"><b>Arc practice network</b> (free test money only)</div>`;
+  h += `<div class="row">This browser's wallet:<br><span class="mono">${esc(a)}</span><br>` +
+       `<button data-act="copyw">Copy</button><a href="${esc(ex)}/address/${esc(a)}" target="_blank" rel="noopener">View on explorer</a></div>`;
+  h += `<div class="row">Balance: ${ARC.balance === null ? "checking..." : ARC.balance.toFixed(4) + " test USDC"} ` +
+       `<button data-act="refresh">Refresh</button><br>` +
+       `<a href="https://faucet.circle.com" target="_blank" rel="noopener">Get free test USDC</a> (choose Arc Testnet, paste the wallet)</div>`;
+  if (e) h += `<div class="row">Escrow contract:<br><span class="mono">${esc(e)}</span><br><button data-act="copye">Copy</button>` +
+              `<a href="${esc(ex)}/address/${esc(e)}" target="_blank" rel="noopener">View on explorer</a>` +
+              (S.arc.escrow ? "" : "<br>Saved in this browser only. Send this address to Claude so every device uses it.") + `</div>`;
+  else h += `<div class="row">Escrow contract: not deployed yet.<br><button data-act="deploy">Deploy contract (once)</button></div>`;
+  if (ARC.deployMsg) h += `<div class="row">${esc(ARC.deployMsg)}</div>`;
+  const label = { done: "Confirmed", waiting: "Confirming...", sending: "Sending...", failed: "Failed", skipped: "Skipped", sent: "Sent", "not sent": "Not sent" };
+  ARC.receipts.slice(-8).reverse().forEach((r) => {
+    h += `<div class="r">${r.kind === "lock" ? "Locked" : "Released"}: ${esc(r.text)}<br>${label[r.status] || esc(r.status)}` +
+         (r.hash ? ` <a href="${esc(ex)}/tx/${esc(r.hash)}" target="_blank" rel="noopener">receipt</a>` : "") +
+         (r.error ? " (" + esc(r.error) + ")" : "") + `</div>`;
+  });
+  el.innerHTML = h;
+}
+const arcBtn = document.getElementById("arcBtn"), arcPanel = document.getElementById("arcPanel");
+arcBtn.addEventListener("click", () => {
+  arcPanel.style.display = arcPanel.style.display === "none" ? "block" : "none";
+  arcRefreshBalance(); arcShow();
+});
+arcPanel.addEventListener("click", (ev) => {
+  const act = ev.target && ev.target.getAttribute && ev.target.getAttribute("data-act");
+  if (!act || !ARC.ok) return;
+  if (act === "copyw") copyText(ARC.wallet.address);
+  if (act === "copye" && ARC.escrow) copyText(ARC.escrow.target);
+  if (act === "refresh") arcRefreshBalance();
+  if (act === "deploy" && !ARC.deploying) {
+    ARC.deploying = true;
+    arcDeploy().catch((err) => { ARC.deployMsg = "Deploy failed: " + ((err && (err.shortMessage || err.message)) || err); console.warn(err); })
+               .finally(() => { ARC.deploying = false; arcShow(); });
+  }
+});
+arcInit();
 
 if (scene.hasLoaded) build(); else scene.addEventListener("loaded", build);
 scene.addEventListener("enter-vr", () => { note.style.display = "none"; });

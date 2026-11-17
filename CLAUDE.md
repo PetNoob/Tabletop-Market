@@ -125,6 +125,16 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - NOT DONE (next): in index.html add ethers from cdnjs; SETTINGS.arc {rpc, chainId, explorer, escrow, dollarsToUsdc 0.01}; an ARC module (wallet from localStorage, queued transactions); a "Blockchain setup" panel on the welcome screen (wallet address + copy, balance, faucet link, Deploy button, receipts with explorer links); Deploy = compile the .sol in a Web Worker with soljson (must be a Worker, Chrome blocks it on the main thread) then ethers ContractFactory; call arcLock from addPick and arcRelease from settleCash (pass the Gemini order id into the receipt text); show the receipt count on the balance card. Then Brian funds the wallet at faucet.circle.com (10 USDC per hour), presses Deploy, and sends the contract address to hardcode in SETTINGS.
 - A browser-tool attempt to compile the contract was denied by the permission system; do not retry that route. Compile in the app's own Worker, or ask Brian before installing a local compiler.
 
+## Arc wired into the app (UNTESTED), Nov 17
+- index.html loads ethers 6.13.4 from cdnjs (with an integrity hash). `SETTINGS.arc` = rpc, chainId 5042002, explorer https://explorer.testnet.arc.io, `escrow` (empty until Brian deploys), `dollarsToUsdc` 0.01 (a $5 pick locks 0.05 test USDC, because the faucet gives only 10 per hour).
+- Each browser makes its own practice wallet (key in localStorage `tm-arc-key`; testnet only, disclose). PC and headset are separate wallets and each needs faucet money.
+- `addPick` calls `arcLock` (placePick with the pick key hashed, odds in basis points, and a readable receipt; in live mode the receipt names the Gemini order). `settleCash` calls `arcRelease` (cashOut with the same share). Transactions run one at a time in `ARC.queue`. Failures never block the app; they show in the receipts list.
+- Welcome screen: "Blockchain setup" opens a panel with the wallet address (copy), balance, faucet link, a "Deploy contract (once)" button, the contract address, and the last 8 receipts with explorer links. Deploy compiles contracts/TabletopEscrow.sol in a Web Worker with soljson 0.8.26 (evmVersion paris), then deploys with ethers; the address is saved in localStorage `tm-arc-escrow` until it is hardcoded in `SETTINGS.arc.escrow`.
+- The 3D balance card shows "Secured on Arc: N receipts" once a contract is set.
+- Releases during a simulation ARE sent: the contract returns a share of the stake, never a simulated amount, so this is safe (supersedes the earlier note).
+- Not built: releasing locks left over after a page reload (the app forgets picks; locks stay in the contract). The explorer's /tx/ and /address/ link format is assumed, not checked.
+- Next for Brian: open Blockchain setup on the PC, fund the wallet at faucet.circle.com (Arc Testnet), press Deploy, send Claude the contract address; then fund the headset's wallet the same way.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
