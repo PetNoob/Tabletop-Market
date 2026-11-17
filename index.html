@@ -1034,7 +1034,8 @@ function confirmPick() {
   if (!LIVE.on) { addPick(m, leg, amt, amt / legPrice(leg)); return closePanel(); }      // test money
 
   // live mode: a real order on Gemini, paid from the owner's account
-  if (!leg.o.sym || leg.o.dead) return panelNote("This market cannot be traded now");
+  if (!leg.o.sym) return panelNote("Sample market: not on Gemini");
+  if (leg.o.closed) return panelNote("Gemini has closed this market");
   const price = tradePrice(leg, "buy"), qty = Math.floor(Math.min(amt, LIVE.cap) / price * 100) / 100;
   if (qty < 0.01) return panelNote("Amount is too small");
   LIVE.busy = true; panelNote("Placing order on Gemini...");
@@ -1112,7 +1113,9 @@ function toMarket(e) {
   if (isGame) cs = cs.slice().sort((x, y) => (x.sportsSide === "away" ? 0 : 1) - (y.sportsSide === "away" ? 0 : 1));   // away first, like the title
   let opts = cs.map((c, i) => ({ name: clean(c.label || c.abbreviatedName) || "Answer " + (i + 1),
                                  color: accent(c.color) || SPARE[i % SPARE.length],
-                                 price: priceOf(c), sym: c.instrumentSymbol || "", hist: null }));
+                                 price: priceOf(c), sym: c.instrumentSymbol || "", hist: null,
+                                 bid: num(c.prices && c.prices.bestBid), ask: num(c.prices && c.prices.bestAsk),
+                                 closed: !!c.marketState && c.marketState !== "open" }));
   if (opts.length === 2 && opts[0].price === null && opts[1].price !== null) opts[0].price = 1 - opts[1].price;
   if (opts.length === 2 && opts[1].price === null && opts[0].price !== null) opts[1].price = 1 - opts[0].price;
   opts = opts.filter((o) => o.price !== null);

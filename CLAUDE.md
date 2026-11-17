@@ -146,6 +146,10 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 ## Gemini key created, Nov 17
 - Brian created the Gemini API key. Worker is deployed at https://tabletop-market.brianlinxd.workers.dev (/status answered tradingConfigured:false before secrets were added). SETTINGS.serverUrl now points to it, so the welcome screen shows "Owner: turn on live trading".
 
+## First live test, Nov 17
+- Gemini key replaced (the first one was exposed in a screenshot; Brian was told to delete it). /status showed tradingConfigured:true. Passcode unlock worked.
+- First pick showed "This market cannot be traded now": the app treated a pubticker 404 (`o.dead`) as untradable, but pubticker 404s for many open markets. Fixed: options keep `bid`, `ask` and `closed` (contract marketState) from the events list; live buys are refused only if there is no symbol or marketState is not "open".
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
