@@ -193,6 +193,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Brian said the wheels are pretty good but digits looked cramped and slightly too big. Digits now drawn at 86 percent (GLYPH) with wider slots (CHAR_W). SETTINGS.distance 0.75 to 0.67 so everything is a bit easier to reach.
 
+- Nov 17 fixes (UNTESTED): odds wheels now read real character widths from the loaded font (`fontInfo`/`tkAdvance`, same formula A-Frame uses) and draw at normal size (GLYPH 1), so spacing matches other text. The amount panel opens only from a pill: duel answer rows no longer open it, and pills ignore touches during arrival (`UI.arriving`, 1.9 s finger lock on open). Table, court lines and hoops scaled to COURT_SCALE 0.85; pills narrower (0.282 wide at x +-0.146); move handle at z 0.275; "over the court" cash-out zone shrunk to match.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

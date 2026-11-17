@@ -682,10 +682,40 @@ const span = (k, a, b) => clamp((k - a) / (b - a), 0, 1);
    and they turn through the digits in between (93% -> 95% turns the 3 through 4 to 5). Going up turns them
    upward, going down turns them downward. The number flashes green or red while it turns. */
 const CHAR_W = (c) => (c === "." || c === "," ? 0.55 : c === "%" ? 1.4 : c === "-" ? 0.8 : c === " " ? 0.6 : 1.08);
-const GLYPH = 0.86;   // each digit is drawn a bit smaller than its slot, so neighbours never touch
+const GLYPH = 1;      // digits are drawn at the same size as all other text
+// the real width of each character, read from the font once it has loaded, so the wheels are spaced like normal text
+let FONT = null;
+const TICKERS = [];
+function fontInfo() {
+  if (FONT) return FONT;
+  const any = document.querySelector("a-text");
+  const f = any && any.components && any.components.text && any.components.text.currentFont;
+  if (!f || !f.chars || !f.chars.length) return null;
+  const adv = {};
+  let ds = 0, dn = 0;
+  f.chars.forEach((ch) => { adv[ch.id] = ch.xadvance; if (ch.id >= 48 && ch.id <= 57) { ds += ch.xadvance; dn++; } });
+  FONT = { adv, wf: dn ? ds / dn : 1 };
+  setTimeout(() => TICKERS.forEach((el) => tkLayout(el, String(el.tk.text).split("").reverse())), 0);   // redo any laid out with guesses
+  return FONT;
+}
+// the width one character takes in a label of this size (same formula the text drawing uses: width / ((0.5 + wrapCount) x digit width))
+function tkAdvance(c, size) {
+  const f = fontInfo(), a = f && f.adv[String(c).charCodeAt(0)];
+  if (!f || a == null) return CHAR_W(c) * size;
+  return a * (size * 40) / (40.5 * f.wf);
+}
+function tkLayout(el, chars) {
+  let x = 0;
+  for (let i = 0; i < chars.length; i++) {
+    const s = tkSlot(el, i), w = tkAdvance(chars[i] || " ", el.tk.size);
+    s.x = -(x + w / 2); x += w;
+    s.a.object3D.position.x = s.x; if (s.b) s.b.object3D.position.x = s.x;
+  }
+}
 function tickerLabel(parent, x, y, z, size, color, align) {
   const el = mk("a-entity", { position: `${x} ${y} ${z}` }, parent);           // always right-aligned at x
   el.tk = { size, base: color, color, text: "", key: "", flash: true, slots: [] };
+  TICKERS.push(el);
   return el;
 }
 function tkSlot(el, i) {
@@ -719,12 +749,7 @@ function setTicker(el, text, key, base) {
   tk.text = text; tk.key = key;
   const nc = String(text).split("").reverse(), oc = String(old).split("").reverse(), n = Math.max(nc.length, oc.length);
   // lay the wheels out from the right, sized for the new number
-  let x = 0;
-  for (let i = 0; i < n; i++) {
-    const s = tkSlot(el, i), w = CHAR_W(nc[i] || " ") * tk.size;
-    s.x = -(x + w / 2); x += w;
-    s.a.object3D.position.x = s.x; if (s.b) s.b.object3D.position.x = s.x;
-  }
+  tkLayout(el, Array.from({ length: n }, (_, i) => nc[i] || " "));
   for (let i = n; i < tk.slots.length; i++) { tkChar(tk.slots[i].a, ""); if (tk.slots[i].b) tk.slots[i].b.object3D.visible = false; }
   const R = tk.size * 0.85, num = (s) => parseFloat(String(s).replace(/[^0-9.\-]/g, ""));
   const a = num(old), b = num(text);
@@ -924,11 +949,13 @@ function build() {
   UI.arcLine = label(bal, "", 0, -0.058, 0.006, 0.0048, C.dim);
 
   // handle to move everything (always there)
-  UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 -0.006 0.305", rot: "-90 0 0", cls: "clickable" });
+  UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 -0.006 0.275", rot: "-90 0 0", cls: "clickable" });
   UI.handle.setAttribute("id", "handle");
 
   buildLobby(market);
   buildMarket(market);
+  UI.courtLines.object3D.scale.set(COURT_SCALE, 1, COURT_SCALE);
+  UI.hoops.object3D.scale.setScalar(COURT_SCALE);
   // a plain panel used only during the move between the list and a market: it grows from the card you pressed
   UI.ghostAt = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
   UI.ghost = slab(UI.ghostAt, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE, order: 7, pos: "0 0 0.012" });
@@ -1099,7 +1126,7 @@ function buildMarket(market) {
   for (let i = 0; i < 4; i++) {
     const row = { i };
     const b = row.b = button(B, "", -0.165, 0.076 - i * 0.056, 0.29, 0.05, () => pressRow(row.i),
-                             { r: 0.012, enabled: () => inMarket() && !!rowOption(row.i) });
+                             { r: 0.012, enabled: () => inMarket() && !!rowOption(row.i) && state.market.kind !== "duel" });
     row.chip = slab(b.el, 0.005, 0.03, 0.002, C.line, { r: 0.0025, order: 2, pos: `-0.134 0 ${b.tz}` });
     row.icon = iconMesh(b.el, 0.026, -0.112, 0, b.tz);
     row.name = label(b.el, "", -0.124, 0.006, b.tz, 0.0074, C.text, "left");
@@ -1130,11 +1157,11 @@ function buildMarket(market) {
   // the two pills on the front edge, facing you: press one to pick that side
   const lip = UI.lip = mk("a-entity", { position: "0 0.034 0.248", rotation: "-42 0 0" }, G);
   UI.pills = [-1, 1].map((dir, i) => {
-    const b = button(lip, "", dir * 0.166, 0, 0.318, 0.058, () => openPanel(i),
-                     { r: 0.029, d: 0.014, opacity: 0.96, enabled: () => inMarket() && state.sel === null });
-    b.icon = iconMesh(b.el, 0.036, -0.124, 0, b.tz);
-    b.name = label(b.el, "", -0.136, 0, b.tz, 0.0088, C.text, "left");
-    b.pct = tickerLabel(b.el, 0.136, 0, b.tz, 0.0155, C.text, "right");
+    const b = button(lip, "", dir * 0.146, 0, 0.282, 0.054, () => openPanel(i),
+                     { r: 0.029, d: 0.014, opacity: 0.96, enabled: () => inMarket() && state.sel === null && !UI.trans && !UI.arriving && state.stage > 0.99 });
+    b.icon = iconMesh(b.el, 0.034, -0.108, 0, b.tz);
+    b.name = label(b.el, "", -0.12, 0, b.tz, 0.0085, C.text, "left");
+    b.pct = tickerLabel(b.el, 0.12, 0, b.tz, 0.015, C.text, "right");
     b.pct.tk.flash = false;                       // the pill is already colored, so it only slides and pulses
     return b;
   });
@@ -1214,12 +1241,15 @@ function openMarket(m) {
   state.market = m; state.view = "market"; state.sel = null;
   syncPicksFor(m);
   showLegs(); lockFingers(); refresh();
+  state.lockUntil = performance.now() + 1900;           // no presses while the market is still arriving
+  UI.arriving = true; setTimeout(() => { UI.arriving = false; }, 1900);
   UI.graph.reveal();
   growIntoBoard(UI.fromCard, () => { if (inMarket() && state.market === m) courtShow(!!m.hoops); });   // the court is only for basketball
   UI.fromCard = null;
   last.game = Date.now(); pollOptions(viewOptions(), m);
 }
 // the card you pressed lifts off and grows into the board; then it fades and the market is underneath
+const COURT_SCALE = 0.85;   // size of the table and court (1 = original)
 const STAGE_LOBBY = { y: 0.235, z: 0.0, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
 function setStage(k) {
   state.stage = k;
@@ -1228,7 +1258,7 @@ function setStage(k) {
   o.rotation.x = THREE.MathUtils.degToRad(mix(STAGE_LOBBY.rx, STAGE_BOARD.rx));
   const b = UI.base.object3D, g = Math.max(0.0001, easeBack(clamp(k, 0, 1)));
   b.visible = k > 0.01;
-  b.scale.set(0.55 + 0.45 * g, 1, 0.55 + 0.45 * g);                 // the table grows out from its middle
+  b.scale.set((0.55 + 0.45 * g) * COURT_SCALE, 1, (0.55 + 0.45 * g) * COURT_SCALE);                 // the table grows out from its middle
   b.position.y = -0.015 * (1 - k);
 }
 // opening a market: the list slides back and the table grows in, then the pressed card grows into the board
@@ -1311,7 +1341,7 @@ function backToLobby() {
 function pressRow(i) {
   const m = state.market, idx = m.rowPage * ROWS.length + i;
   if (!m.opts[idx]) return;
-  if (m.kind === "duel") return openPanel(idx);
+  if (m.kind === "duel") return;                    // on a game the rows are only for reading; pick with the pills
   if (m.sel === idx) return;
   stopSim();
   m.sel = idx; showLegs(); refresh();
@@ -1717,7 +1747,7 @@ function refreshMarket() {
   UI.lip.setAttribute("visible", state.sel === null);
   legs.forEach((leg, i) => {
     const p = legPrice(leg), pos = state.picks[pickKey(m, leg)], pile = PILES[i];
-    UI.pills[i].name.object3D.position.x = setIcon(UI.pills[i].icon, m.kind === "duel" ? leg.o.image : "") ? -0.1 : -0.136;
+    UI.pills[i].name.object3D.position.x = setIcon(UI.pills[i].icon, m.kind === "duel" ? leg.o.image : "") ? -0.085 : -0.12;
     UI.pills[i].name.setAttribute("value", trunc(leg.name, 15));
     setTicker(UI.pills[i].pct, pct(p), m.ticker + "|" + leg.i + "|" + leg.side);
     if (pos) {
@@ -2037,7 +2067,7 @@ window.TM = {
     if (grab.i < 0 || grab.pending) return;
     PILES[grab.i].moveHand(p);
     const lp = document.getElementById("market").object3D.worldToLocal(gv2.copy(p));
-    const over = Math.abs(lp.x) < 0.33 && lp.z > -0.19 && lp.z < 0.21 && lp.y < 0.22;   // still above the court?
+    const over = Math.abs(lp.x) < 0.28 && lp.z > -0.17 && lp.z < 0.19 && lp.y < 0.22;   // still above the court?
     if (over !== grab.over) { grab.over = over; refresh(); }
   },
   grabEnd: () => { if (grab.i >= 0) grabDone(!grab.over); },
