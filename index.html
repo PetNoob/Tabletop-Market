@@ -1985,8 +1985,10 @@ function activityItems() {
     });
   } else if (a === "history") {
     ARC.receipts.slice().reverse().forEach((r) => {
-      out.push({ title: r.text, a: r.kind === "lock" ? "Locked on Arc" : "Released", av: "", b: "", bv: "",
-                 foot: ({ done: "Confirmed on Arc", waiting: "Confirming...", sending: "Sending...", failed: "Failed", skipped: "Skipped" }[r.status] || r.status) +
+      out.push({ title: r.text, a: r.kind === "lock" ? "Locked on Arc" : r.kind === "bridge" ? "Arc to Base" : "Released", av: "", b: "", bv: "",
+                 foot: ({ done: "Confirmed on Arc", waiting: "Confirming...", sending: "Sending...", failed: "Failed", skipped: "Skipped",
+                          quoting: "Getting fee...", approving: "Approving...", burning: "Sending...", confirming: "Circle confirming...",
+                          arrived: "Arrived on Base", slow: "Still with Circle" }[r.status] || r.status) +
                        (r.t ? "  " + shortTime(r.t) : ""), color: r.kind === "lock" ? C.green : C.dim });
     });
   }
@@ -2178,6 +2180,11 @@ function arcInit() {
     ARC.receipts.forEach((r) => { if (r.status === "sending" || r.status === "waiting") r.status = r.hash ? "sent" : "not sent"; });
     ARC.ok = true;
     arcRefreshBalance();
+    ARC.receipts.forEach((r) => {
+      if (r.kind !== "bridge") return;
+      r.watching = false;
+      if (r.hash && !r.mint && (r.status === "confirming" || r.status === "slow")) { r.status = "confirming"; bridgeWatch(r); }
+    });
   } catch (err) { console.warn("Arc:", err); }
 }
 function arcRefreshBalance() {
@@ -2219,6 +2226,84 @@ function arcRelease(pickKeyText, frac, text) {
   const bps = clamp(Math.round(frac * 10000), 1, 10000);
   arcSend("release", text, 0, () => ARC.escrow.cashOut(ethers.id(pickKeyText), bps, clean(text).slice(0, 90)));
 }
+/* ---------- Move to Gemini: Arc to Base with Circle's bridge (CCTP), on the practice networks ----------
+   1. Approve Circle's bridge to take the USDC (one transaction on Arc).
+   2. depositForBurnWithHook burns it on Arc. The hook asks Circle's Forwarding Service to finish on Base,
+      so this wallet needs nothing on Base.
+   3. Circle confirms the burn and mints the same USDC on Base (we watch Circle's public API for that).
+   4. Depositing to Gemini is the next step in the real product: Gemini only accepts real USDC, not test USDC. */
+const CCTP = {
+  messenger: "0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa",   // TokenMessengerV2 (same on every CCTP testnet; checked on Arc testnet)
+  usdc: "0x3600000000000000000000000000000000000000",        // USDC's token interface on Arc (6 decimals)
+  arcDomain: 26, baseDomain: 6,                               // Circle's numbers for Arc and Base
+  iris: "https://iris-api-sandbox.circle.com",                // Circle's attestation service for testnets
+  hook: "0x636374702d666f72776172640000000000000000000000000000000000000000",   // "cctp-forward": use the Forwarding Service
+  baseExplorer: "https://sepolia.basescan.org"
+};
+function arcBridge(amount) {
+  if (!ARC.ok || ARC.bridging || !(amount > 0)) return;
+  ARC.bridging = true;
+  const r = { kind: "bridge", text: `Move ${amount} test USDC toward Gemini (Arc to Base)`, hash: "", mint: "", status: "quoting", t: Date.now() };
+  ARC.receipts.push(r); arcSaveReceipts(); arcShow();
+  ARC.queue = ARC.queue.then(async () => {
+    try {
+      // Circle's fee for this route right now (it changes, so ask just before sending)
+      const res = await fetch(`${CCTP.iris}/v2/burn/USDC/fees/${CCTP.arcDomain}/${CCTP.baseDomain}?forward=true`);
+      if (!res.ok) throw new Error("Circle did not give a fee quote");
+      const quotes = await res.json(), q = (Array.isArray(quotes) ? quotes : []).find((x) => x.finalityThreshold === 1000);
+      if (!q || !q.forwardFee) throw new Error("Circle has no fast transfer quote right now");
+      const amt = BigInt(Math.round(amount * 1e6));
+      const maxFee = BigInt(q.forwardFee.med) + (amt * BigInt(Math.round((q.minimumFee || 0) * 100))) / 1000000n;
+      const total = amt + maxFee;
+      r.fee = Number(maxFee) / 1e6;
+      if (ARC.balance !== null && ARC.balance < Number(total) / 1e6 + 0.03) throw new Error("not enough test USDC in this wallet");
+      // 1. let Circle's bridge take the USDC
+      r.status = "approving"; arcShow();
+      const usdc = new ethers.Contract(CCTP.usdc, ["function approve(address spender, uint256 amount) returns (bool)",
+                                                   "function allowance(address owner, address spender) view returns (uint256)"], ARC.wallet);
+      if ((await usdc.allowance(ARC.wallet.address, CCTP.messenger)) < total) {
+        const ap = await usdc.approve(CCTP.messenger, total);
+        await ap.wait();
+      }
+      // 2. burn on Arc, asking Circle to finish on Base
+      r.status = "burning"; arcShow();
+      const tm = new ethers.Contract(CCTP.messenger, ["function depositForBurnWithHook(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold, bytes hookData)"], ARC.wallet);
+      const tx = await tm.depositForBurnWithHook(total, CCTP.baseDomain, ethers.zeroPadValue(ARC.wallet.address, 32), CCTP.usdc,
+                                                 ethers.ZeroHash, maxFee, 1000, CCTP.hook);
+      r.hash = tx.hash; arcSaveReceipts(); arcShow();
+      const done = await tx.wait();
+      if (!done || done.status !== 1) throw new Error("the burn on Arc did not go through");
+      r.status = "confirming"; arcSaveReceipts();
+    } catch (err) {
+      r.status = "failed"; r.error = trunc(String((err && (err.shortMessage || err.message)) || err), 90);
+      console.warn("Arc bridge:", err);
+    }
+    ARC.bridging = false; arcSaveReceipts(); arcShow(); arcRefreshBalance();
+    if (r.status === "confirming") bridgeWatch(r);
+  });
+}
+// 3. wait for Circle to confirm and mint on Base
+function bridgeWatch(r) {
+  if (r.watching || !r.hash) return;
+  r.watching = true;
+  const t0 = Date.now();
+  const poll = () => fetch(`${CCTP.iris}/v2/messages/${CCTP.arcDomain}?transactionHash=${r.hash}`)
+    .then((x) => (x.ok ? x.json() : null))
+    .then((j) => {
+      const msg = j && j.messages && j.messages[0];
+      if (msg && msg.forwardTxHash) {
+        r.mint = msg.forwardTxHash; r.status = "arrived"; r.watching = false;
+        arcSaveReceipts(); arcShow(); return;
+      }
+      if (msg && msg.status) r.circle = String(msg.status).replace(/_/g, " ");
+      arcShow();
+      if (Date.now() - t0 > 15 * 60000) { r.watching = false; r.status = "slow"; arcSaveReceipts(); arcShow(); return; }
+      setTimeout(poll, 4000);
+    })
+    .catch(() => { if (Date.now() - t0 > 15 * 60000) { r.watching = false; r.status = "slow"; arcShow(); } else setTimeout(poll, 6000); });
+  poll();
+}
+
 // compile contracts/TabletopEscrow.sol in a background worker (the compiler is about 8 MB), then deploy it
 function compileSol(source) {
   return new Promise((resolve, reject) => {
@@ -2290,10 +2375,32 @@ function arcShow() {
               (S.arc.escrow ? "" : "<br>Saved in this browser only. Send this address to Claude so every device uses it.") + `</div>`;
   else h += `<div class="row">Escrow contract: not deployed yet.<br><button data-act="deploy">Deploy contract (once)</button></div>`;
   if (ARC.deployMsg) h += `<div class="row">${esc(ARC.deployMsg)}</div>`;
-  const label = { done: "Confirmed", waiting: "Confirming...", sending: "Sending...", failed: "Failed", skipped: "Skipped", sent: "Sent", "not sent": "Not sent" };
+  // Move to Gemini: Arc to Base with Circle's bridge
+  h += `<div class="row"><b>Move to Gemini</b> (Circle's bridge, Arc to Base)<br>` +
+       (ARC.bridging ? "Moving..." : [0.25, 0.5, 1].map((a) => `<button data-act="bridge" data-amt="${a}">${a} test USDC</button>`).join("")) + `</div>`;
+  const br = ARC.receipts.filter((x) => x.kind === "bridge").slice(-1)[0];
+  if (br) {
+    const st = br.status, tick = (ok) => (ok ? "&#10003; " : "&#9675; ");
+    const sent = !!br.hash && st !== "failed", arrived = st === "arrived";
+    h += `<div class="row">` +
+      `${tick(sent && st !== "burning")}1. Leaving Arc ` +
+        (br.hash ? `<a href="${esc(ex)}/tx/${esc(br.hash)}" target="_blank" rel="noopener">burn receipt</a>` :
+         st === "quoting" ? "(getting Circle's fee)" : st === "approving" ? "(approving the bridge)" : st === "burning" ? "(sending)" : "") + `<br>` +
+      `${tick(arrived)}2. Circle confirms ${st === "confirming" ? "(waiting" + (br.circle ? ": " + esc(br.circle) : "") + ")" : ""}<br>` +
+      `${tick(arrived)}3. Arrives on Base ` +
+        (br.mint ? `<a href="${CCTP.baseExplorer}/tx/${esc(br.mint)}" target="_blank" rel="noopener">mint receipt</a>` : "") + `<br>` +
+      `&#9675; 4. Deposit to Gemini: next step in the real product (Gemini only accepts real USDC)` +
+      (st === "failed" ? `<br>Failed: ${esc(br.error || "")}` : "") +
+      (st === "slow" ? "<br>Circle is taking a while. Reopen this panel later to check." : "") +
+      (br.fee ? `<br>Circle's bridge fee: ${br.fee.toFixed(4)} test USDC` : "") + `</div>`;
+  }
+  const label = { done: "Confirmed", waiting: "Confirming...", sending: "Sending...", failed: "Failed", skipped: "Skipped", sent: "Sent", "not sent": "Not sent",
+                  quoting: "Getting fee...", approving: "Approving...", burning: "Sending...", confirming: "Circle confirming...",
+                  arrived: "Arrived on Base", slow: "Still with Circle" };
   ARC.receipts.slice(-8).reverse().forEach((r) => {
-    h += `<div class="r">${r.kind === "lock" ? "Locked" : "Released"}: ${esc(r.text)}<br>${label[r.status] || esc(r.status)}` +
+    h += `<div class="r">${r.kind === "lock" ? "Locked" : r.kind === "bridge" ? "Bridge" : "Released"}: ${esc(r.text)}<br>${label[r.status] || esc(r.status)}` +
          (r.hash ? ` <a href="${esc(ex)}/tx/${esc(r.hash)}" target="_blank" rel="noopener">receipt</a>` : "") +
+         (r.mint ? ` <a href="${CCTP.baseExplorer}/tx/${esc(r.mint)}" target="_blank" rel="noopener">on Base</a>` : "") +
          (r.error ? " (" + esc(r.error) + ")" : "") + `</div>`;
   });
   el.innerHTML = h;
@@ -2309,6 +2416,7 @@ arcPanel.addEventListener("click", (ev) => {
   if (act === "copyw") copyText(ARC.wallet.address);
   if (act === "copye" && ARC.escrow) copyText(ARC.escrow.target);
   if (act === "refresh") arcRefreshBalance();
+  if (act === "bridge") arcBridge(parseFloat(ev.target.getAttribute("data-amt")));
   if (act === "deploy" && !ARC.deploying) {
     ARC.deploying = true;
     arcDeploy().catch((err) => { ARC.deployMsg = "Deploy failed: " + ((err && (err.shortMessage || err.message)) || err); console.warn(err); })

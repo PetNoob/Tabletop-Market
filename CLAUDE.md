@@ -197,6 +197,12 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: crypto lobby cards showed crushed odds digits on the lower rows. Cause (diagnosed, not confirmed): wheel slots are created lazily and positioned at once, then A-Frame's position component initializes on "loaded" and resets x to 0. Fix: `tkWhenReady` re-runs `tkLayout` for that ticker when a new slot's entity loads.
 
+## Move to Gemini: Arc to Base with CCTP (built Nov 17, UNTESTED)
+- Brian chose option 1: practice networks end to end, with the final deposit into Gemini shown as a labeled next step (Gemini only accepts real USDC). He dropped the on-ramp idea for now.
+- Checked live before building: CCTP TokenMessengerV2 0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa and MessageTransmitterV2 0xe737e5cebeeba77efe34d4aa090756590b1ce275 have code on Arc testnet (and the transmitter on Base Sepolia); iris-api-sandbox fees 26 -> 6 with forward=true returned forwardFee med about 0.0528 USDC, minimumFee 0, CORS *. The address 0x28b5... listed on docs.arc.io is the MAINNET messenger (no code on testnet).
+- Flow (`arcBridge`, from Circle's Ethereum-to-Arc forwarding quickstart, reversed): fee quote, approve USDC (0x3600...) to the messenger, depositForBurnWithHook(total, 6, wallet as bytes32, usdc, 0, maxFee, 1000, hook "cctp-forward"), then `bridgeWatch` polls /v2/messages/26?transactionHash= until `forwardTxHash` (the Base mint by Circle). Runs inside ARC.queue. Resumes watching after a reload.
+- UI: "Move to Gemini" section in the Blockchain setup panel (0.25 / 0.5 / 1 test USDC) with four steps and receipt links (Arc explorer for the burn, sepolia.basescan.org for the mint). Shows in Activity > History as "Arc to Base".
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
