@@ -1130,6 +1130,8 @@ function liveBalance() {
   serverCall("/balance", {}).then((b) => {
     if (!LIVE.on || !isFinite(b.usd)) return;
     state.balance = Math.round(b.usd * 100) / 100;
+    // show both numbers Gemini sends: free to trade, and the total including money still held
+    UI.interest.setAttribute("value", `Gemini: ${money(b.usd)} free, ${money(isFinite(b.total) ? b.total : b.usd)} total`);
     refresh();
   }).catch((err) => {
     console.warn("Gemini balance:", err.message);
