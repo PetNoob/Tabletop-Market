@@ -177,6 +177,11 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Gemini sends `imageUrl` per event (bitcoin, oil barrel) and per contract (generic team shoes for NBA, helmets for NFL, in team colors; not league logos). assets.gemini.com sends no CORS header, so WebGL cannot use them directly. New public worker route /img?u= (only https://assets.gemini.com/...) passes them through with CORS and a 1-day cache.
 - App: `iconEntry`/`iconMesh`/`setIcon` (texture cache `TEX`). Pictures on lobby cards, the board title, answer rows, and duel pills; Activity cards use the position's event picture. `SETTINGS.icons` turns them off. Images are AVIF or PNG (Quest browser decodes AVIF). Needs the worker re-pasted.
 
+## Design pass, Nov 17 (UNTESTED)
+- Market pictures have rounded corners (`roundedPlane`). Brian confirmed the pictures show.
+- Court only for basketball (`courtShow(!!m.hoops)`); other sports and all other markets get the plain table surface (Brian picked option A and small touches; the plain surface was Claude's default since he did not choose).
+- Animations (`tween`/`stepAnims`, run from TM.frame): the court lines draw out from the center and the hoops rise with a slight overshoot and a rim glow (900 ms), retract in 380 ms. Opening a market: a stand-in panel (`UI.ghost`) grows from the pressed card into the board, then fades to reveal the market (700 ms; `UI.trans` stops refresh() from toggling views). Back: it shrinks into that market's card (450 ms). Pills slide up from the table edge; the graph line draws left to right on open (`graph.reveal()`).
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

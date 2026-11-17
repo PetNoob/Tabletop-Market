@@ -655,6 +655,27 @@ function makePile(parent, x, z) {
   return pile;
 }
 
+/* ---------- short animations ----------
+   tween(name, ms, step, done): calls step(k) every frame with k going 0 to 1. A new tween with the
+   same name replaces the old one, so pressing quickly never leaves two fighting. */
+const ANIMS = [];
+function tween(name, ms, step, done) {
+  for (let i = ANIMS.length - 1; i >= 0; i--) if (ANIMS[i].name === name) ANIMS.splice(i, 1);
+  const a = { name, t0: performance.now(), ms, step, done };
+  ANIMS.push(a); step(0);
+  return a;
+}
+function stepAnims(now) {
+  for (let i = ANIMS.length - 1; i >= 0; i--) {
+    const a = ANIMS[i], k = clamp((now - a.t0) / a.ms, 0, 1);
+    a.step(k);
+    if (k >= 1) { ANIMS.splice(i, 1); if (a.done) a.done(); }
+  }
+}
+const easeOut = (k) => 1 - Math.pow(1 - k, 3);
+const easeBack = (k) => { const c = 1.7; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2); };   // overshoots a little, then settles
+const span = (k, a, b) => clamp((k - a) / (b - a), 0, 1);
+
 /* ---------- the price graph ---------- */
 function makeGraph(parent, x, y, w, h) {
   const holder = mk("a-entity", { position: `${x} ${y} 0.005` }, parent);
@@ -704,15 +725,26 @@ function makeGraph(parent, x, y, w, h) {
   const tm = label(holder, "", (x0 + x1) / 2, y0 - 0.013, 0.004, 0.0052, C.dim);
   const tr = label(holder, "", x1, y0 - 0.013, 0.004, 0.0052, C.dim, "right");
   const clock = (ms) => clean(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
+  let revealT0 = 0, revealPending = false;
   return {
     // the dot breathes and its glow pulses outward, about once a second
+    // the next time there is data, draw the line from left to right
+    reveal: function () { revealPending = true; revealT0 = 0; },
     pulse: function (now) {
       const k = (now % 1400) / 1400, s = 1 + 0.12 * Math.sin(now / 220);
+      const rk = revealT0 ? clamp((now - revealT0) / 750, 0, 1) : 1;
       lines.forEach((L) => {
-        if (!L.dot.visible) return;
+        if (!L.mesh.visible) return;
+        if (rk < 1) {
+          const c = Math.max(1, Math.floor((L.n || 0) * easeOut(rk))) * 6;
+          L.geo.setDrawRange(0, c); L.fgeo.setDrawRange(0, c); L.dot.visible = L.glow.visible = false;
+          return;
+        }
+        if (revealT0) { L.geo.setDrawRange(0, (L.n || 0) * 6); L.fgeo.setDrawRange(0, (L.n || 0) * 6); L.dot.visible = L.glow.visible = true; }
         L.dot.scale.setScalar(s);
         L.glow.scale.setScalar(0.7 + 1.1 * k); L.gmat.opacity = 0.75 * (1 - k);
       });
+      if (rk >= 1) revealT0 = 0;
     },
     // series = [{ color, pts: [{t, p}] }], at most two
     set: function (series, caption) {
@@ -748,12 +780,13 @@ function makeGraph(parent, x, y, w, h) {
           L.fpos.set([ax, ay, 0, ax, y0, 0, bx, by, 0, bx, by, 0, ax, y0, 0, bx, y0, 0], n * 18);
           n++;
         }
-        L.geo.attributes.position.needsUpdate = true; L.geo.setDrawRange(0, n * 6);
+        L.geo.attributes.position.needsUpdate = true; L.geo.setDrawRange(0, n * 6); L.n = n;
         L.fgeo.attributes.position.needsUpdate = true; L.fgeo.setDrawRange(0, n * 6);
         L.mat.color.set(s.color); L.fmat.color.set(s.color); L.gmat.color.set(s.color);
         const end = pts[pts.length - 1];
         L.dot.position.x = L.glow.position.x = X(end); L.dot.position.y = L.glow.position.y = Y(end);
         L.mesh.visible = L.fill.visible = L.dot.visible = L.glow.visible = true;
+        if (revealPending && n > 0) { revealT0 = performance.now(); revealPending = false; }
       });
     }
   };
@@ -794,6 +827,10 @@ function build() {
 
   buildLobby(market);
   buildMarket(market);
+  // a plain panel used only during the move between the list and a market: it grows from the card you pressed
+  UI.ghostAt = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
+  UI.ghost = slab(UI.ghostAt, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE, order: 7, pos: "0 0 0.012" });
+  UI.ghost.setAttribute("visible", false);
 
   // glove-style hands: A-Frame's built-in hand model, drawn see-through over your real hands
   if (S.handStyle === "glove") ["left", "right"].forEach((h) => {
@@ -906,7 +943,7 @@ function buildLobby(market) {
   for (let i = 0; i < 6; i++) {
     const x = -0.158 + (i % 2) * 0.316, y = 0.052 - Math.floor(i / 2) * 0.088;
     const card = { m: null };
-    const b = card.b = button(L, "", x, y, 0.30, 0.082, () => (card.act ? openActivity(card.act) : openMarket(card.m)),
+    const b = card.b = button(L, "", x, y, 0.30, 0.082, () => { UI.fromCard = card; return card.act ? openActivity(card.act) : openMarket(card.m); },
                               { r: 0.014, enabled: () => inLobby() && (!!card.m || !!(card.act && card.act.ticker)) });
     card.icon = iconMesh(b.el, 0.024, -0.126, 0.02, b.tz);
     card.title = label(b.el, "", -0.138, 0.032, b.tz, 0.0062, C.text, "left", 0.165, "top");
@@ -1072,18 +1109,78 @@ function openMarket(m) {
   stopSim();
   state.market = m; state.view = "market"; state.sel = null;
   syncPicksFor(m);
-  UI.courtLines.setAttribute("visible", !!m.court);
-  UI.hoops.setAttribute("visible", !!m.hoops);
   showLegs(); lockFingers(); refresh();
+  UI.graph.reveal();
+  growIntoBoard(UI.fromCard); UI.fromCard = null;
+  courtShow(!!m.hoops);                  // the court is only for basketball
   last.game = Date.now(); pollOptions(viewOptions(), m);
+}
+// the card you pressed lifts off and grows into the board; then it fades and the market is underneath
+function growIntoBoard(card) {
+  const g = UI.ghost, o = g.object3D, mat = g.getObject3D("mesh").material;
+  const fx = card ? card.b.el.object3D.position.x : 0, fy = card ? card.b.el.object3D.position.y : 0;
+  const sx = card ? 0.30 / 0.66 : 0.6, sy = card ? 0.082 / 0.42 : 0.6;
+  UI.trans = true;
+  UI.lobby.setAttribute("visible", true); UI.game.setAttribute("visible", false);
+  g.setAttribute("visible", true);
+  UI.lip.object3D.position.y = 0.004;
+  tween("board", 700, (k) => {
+    const a = easeOut(span(k, 0, 0.55));
+    o.position.set(fx * (1 - a), fy * (1 - a), 0.012 + 0.03 * Math.sin(Math.PI * a));
+    o.scale.set(sx + (1 - sx) * a, sy + (1 - sy) * a, 1);
+    if (k >= 0.55 && UI.trans) { UI.trans = false; UI.lobby.setAttribute("visible", false); UI.game.setAttribute("visible", true); }
+    mat.opacity = SEE * (1 - span(k, 0.55, 1));
+    UI.lip.object3D.position.y = 0.004 + 0.03 * easeBack(span(k, 0.45, 1));            // the pills slide up from the table edge
+  }, () => { g.setAttribute("visible", false); mat.opacity = SEE; UI.trans = false; UI.lip.object3D.position.y = 0.034; refresh(); });
+}
+// going back: the board shrinks into the market's card in the list and fades away
+function shrinkIntoCard(ticker) {
+  const g = UI.ghost, o = g.object3D, mat = g.getObject3D("mesh").material;
+  const card = CARDS.find((c) => c.m && c.m.ticker === ticker && c.b.el.getAttribute("visible"));
+  const tx = card ? card.b.el.object3D.position.x : 0, ty = card ? card.b.el.object3D.position.y : 0;
+  const sx = card ? 0.30 / 0.66 : 0.5, sy = card ? 0.082 / 0.42 : 0.5;
+  g.setAttribute("visible", true);
+  tween("board", 450, (k) => {
+    const a = easeOut(k);
+    o.position.set(tx * a, ty * a, 0.012 + 0.02 * Math.sin(Math.PI * a));
+    o.scale.set(1 + (sx - 1) * a, 1 + (sy - 1) * a, 1);
+    mat.opacity = SEE * (1 - span(k, 0.35, 1));
+  }, () => { g.setAttribute("visible", false); mat.opacity = SEE; });
+}
+// the court draws itself out from the center circle and the hoops rise; going away, it all pulls back in
+function courtShow(on) {
+  if (!!state.courtOn === on) return;
+  state.courtOn = on;
+  const lines = Array.from(UI.courtLines.children).map((e) => e.object3D);   // center line, two end lines, two sidelines, circle
+  const hoops = Array.from(UI.hoops.children).map((e) => e.object3D);
+  const rims = [UI.rim0, UI.rim1].map((r) => r && r.getObject3D("mesh")).filter(Boolean);
+  const tiny = 0.0001;
+  const draw = (center, sides, ends, hoop, glow) => {
+    if (lines[0]) lines[0].scale.set(1, 1, Math.max(tiny, center));
+    [lines[1], lines[2]].forEach((l) => l && l.scale.set(1, 1, Math.max(tiny, ends)));
+    [lines[3], lines[4]].forEach((l) => l && l.scale.set(Math.max(tiny, sides), 1, 1));
+    if (lines[5]) lines[5].scale.setScalar(Math.max(tiny, center));
+    hoops.forEach((h) => h.scale.set(1, Math.max(tiny, hoop), 1));
+    rims.forEach((r) => { if (r.material && r.material.emissive) { r.material.emissive.copy(r.material.color); r.material.emissiveIntensity = glow; } });
+  };
+  if (on) {
+    UI.courtLines.setAttribute("visible", true); UI.hoops.setAttribute("visible", true);
+    tween("court", 900, (k) => draw(easeOut(span(k, 0.15, 0.55)), easeOut(span(k, 0.3, 0.7)), easeOut(span(k, 0.5, 0.85)),
+                                   easeBack(span(k, 0.45, 1)), 1.2 * Math.sin(Math.PI * span(k, 0.7, 1))));
+  } else {
+    tween("court", 380, (k) => { const a = 1 - easeOut(k); draw(a, a, a, a, 0); },
+          () => { UI.courtLines.setAttribute("visible", false); UI.hoops.setAttribute("visible", false); });
+  }
 }
 function backToLobby() {
   grabReset();
   stopSim();
   state.sel = null; UI.panel.setAttribute("visible", false);
+  const was = state.market && state.market.ticker;
   state.view = "lobby";
-  UI.courtLines.setAttribute("visible", false);
+  courtShow(false);
   lockFingers(); refresh();
+  shrinkIntoCard(was);
   last.cards = Date.now(); pollOptions(cardOptions());
 }
 function pressRow(i) {
@@ -1508,8 +1605,10 @@ function refreshMarket() {
 }
 function refresh() {
   if (!UI.lobby || !UI.game) return;
-  UI.lobby.setAttribute("visible", !inMarket());
-  UI.game.setAttribute("visible", inMarket());
+  if (!UI.trans) {
+    UI.lobby.setAttribute("visible", !inMarket());
+    UI.game.setAttribute("visible", inMarket());
+  }
   UI.balance.setAttribute("value", money(state.balance));
   if (inMarket()) refreshMarket(); else refreshLobby();
   refreshPanel();
@@ -1792,7 +1891,7 @@ window.TM = {
   state, press, openMarket, backToLobby, phys, shove,
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepPhysics(now); stepGrab(); PILES.forEach((p) => p.update(now)); stepPulse(now); },
+  frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
   hoverAt: (point, ray) => {
