@@ -182,6 +182,11 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Court only for basketball (`courtShow(!!m.hoops)`); other sports and all other markets get the plain table surface (Brian picked option A and small touches; the plain surface was Claude's default since he did not choose).
 - Animations (`tween`/`stepAnims`, run from TM.frame): the court lines draw out from the center and the hoops rise with a slight overshoot and a rim glow (900 ms), retract in 380 ms. Opening a market: a stand-in panel (`UI.ghost`) grows from the pressed card into the board, then fades to reveal the market (700 ms; `UI.trans` stops refresh() from toggling views). Back: it shrinks into that market's card (450 ms). Pills slide up from the table edge; the graph line draws left to right on open (`graph.reveal()`).
 
+## Lobby without a table, Nov 17 (UNTESTED)
+- Brian: animations are nice. Asked for the table to disappear in the lobby, the lobby to slide forward, and slide back when a market opens; and easier-to-read text.
+- `UI.base` holds the table slabs. `setStage(k)`: 0 = lobby (list at STAGE_LOBBY, forward and lower, table hidden), 1 = market (list at the back, table grown in with a slight overshoot). Opening: stage slides to 1 (420 ms), then the card grows into the board, then the court draws in. Back: the board shrinks into its card, then the stage slides to 0. Balance card and move handle stay in the lobby. Hand brush on the base only counts at stage > 0.5.
+- Readability: C.dim brightened to #b0b8c3, panels 93 percent solid (SEE), lobby card titles, answer names, feet, tabs, board answers and graph labels all larger.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

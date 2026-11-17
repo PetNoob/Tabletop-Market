@@ -317,7 +317,7 @@ AFRAME.registerComponent("xr-input", {
    ====================================================================== */
 const S = SETTINGS, THREE = AFRAME.THREE;
 const C = { base: "#15171a", court: "#202328", panel: "#1b1e22", key: "#2b2f36", keyOn: "#434a54", line: "#4d535d",
-            text: "#f2f4f7", dim: "#8d95a0", green: "#2fbf71", greenInk: "#06210f", red: "#e5484d", handle: "#5d646e", walletOn: "#1f5a3c" };
+            text: "#f2f4f7", dim: "#b0b8c3", green: "#2fbf71", greenInk: "#06210f", red: "#e5484d", handle: "#5d646e", walletOn: "#1f5a3c" };
 const state = {
   balance: S.startBalance, sel: null, amount: 5, typed: "",
   view: "lobby", page: 0, lockUntil: 0,
@@ -380,7 +380,7 @@ function slab(parent, w, h, d, color, opt) {
   return el;
 }
 const BOARD_POS = "0 0.25 -0.255";   // the upright board: its bottom edge sits at the back edge of the base
-const SEE = 0.86;   // how solid the big surfaces are (1 = fully solid)
+const SEE = 0.93;   // how solid the big surfaces are (1 = fully solid)
 
 function button(parent, text, x, y, w, h, onPress, opt) {
   opt = opt || {};
@@ -457,7 +457,7 @@ function brushAt(hand, tip, now) {
   if (dt > 0 && dt < 0.1) {
     // only the real surfaces count: the flat base (2 cm thick zone) and the board itself (2 cm either side)
     const lp = market.object3D.worldToLocal(pv2.copy(tip));
-    const onBase = Math.abs(lp.x) < 0.35 && lp.z > -0.21 && lp.z < 0.29 && lp.y > -0.02 && lp.y < 0.02;
+    const onBase = state.stage > 0.5 && Math.abs(lp.x) < 0.35 && lp.z > -0.21 && lp.z < 0.29 && lp.y > -0.02 && lp.y < 0.02;
     const bp = UI.lobby.object3D.worldToLocal(pv2.copy(tip));
     const onBoard = Math.abs(bp.x) < 0.33 && Math.abs(bp.y) < 0.21 && Math.abs(bp.z) < 0.02;
     if (onBase || onBoard) {
@@ -716,14 +716,14 @@ function makeGraph(parent, x, y, w, h) {
     const glow = new THREE.Mesh(new THREE.PlaneGeometry(0.026, 0.026), gmat); glow.position.z = 0.0012; glow.renderOrder = 5; g.add(glow);
     return { pos, geo, mat, mesh, fpos, fgeo, fmat, fill, dot, glow, gmat };
   });
-  const cap = label(holder, "", -w / 2 + 0.014, h / 2 - 0.016, 0.004, 0.0056, C.dim, "left");
-  const hi = label(holder, "", w / 2 - 0.008, y1, 0.004, 0.0056, C.dim, "right");
-  const mid = label(holder, "", w / 2 - 0.008, (y0 + y1) / 2, 0.004, 0.0056, C.dim, "right");
-  const lo = label(holder, "", w / 2 - 0.008, y0, 0.004, 0.0056, C.dim, "right");
+  const cap = label(holder, "", -w / 2 + 0.014, h / 2 - 0.016, 0.004, 0.0063, C.dim, "left");
+  const hi = label(holder, "", w / 2 - 0.008, y1, 0.004, 0.0063, C.dim, "right");
+  const mid = label(holder, "", w / 2 - 0.008, (y0 + y1) / 2, 0.004, 0.0063, C.dim, "right");
+  const lo = label(holder, "", w / 2 - 0.008, y0, 0.004, 0.0063, C.dim, "right");
   // time stamps along the bottom
-  const tl = label(holder, "", x0, y0 - 0.013, 0.004, 0.0052, C.dim, "left");
-  const tm = label(holder, "", (x0 + x1) / 2, y0 - 0.013, 0.004, 0.0052, C.dim);
-  const tr = label(holder, "", x1, y0 - 0.013, 0.004, 0.0052, C.dim, "right");
+  const tl = label(holder, "", x0, y0 - 0.013, 0.004, 0.0058, C.dim, "left");
+  const tm = label(holder, "", (x0 + x1) / 2, y0 - 0.013, 0.004, 0.0058, C.dim);
+  const tr = label(holder, "", x1, y0 - 0.013, 0.004, 0.0058, C.dim, "right");
   const clock = (ms) => clean(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
   let revealT0 = 0, revealPending = false;
   return {
@@ -801,8 +801,9 @@ function build() {
   market.object3D.position.copy(phys.pos);
 
   // base and playing surface (always there)
-  slab(market, 0.70, 0.50, 0.016, C.base, { r: 0.04, opacity: 0.93, pos: "0 -0.008 0.04", rot: "-90 0 0" });
-  slab(market, 0.62, 0.34, 0.004, C.court, { r: 0.022, opacity: 0.95, order: 1, pos: "0 0.002 0", rot: "-90 0 0" });
+  UI.base = mk("a-entity", {}, market);       // the table surface: only shown while a market is open
+  slab(UI.base, 0.70, 0.50, 0.016, C.base, { r: 0.04, opacity: 0.93, pos: "0 -0.008 0.04", rot: "-90 0 0" });
+  slab(UI.base, 0.62, 0.34, 0.004, C.court, { r: 0.022, opacity: 0.95, order: 1, pos: "0 0.002 0", rot: "-90 0 0" });
 
   // court lines, only shown for team-vs-team sports
   UI.courtLines = mk("a-entity", { visible: false }, market);
@@ -842,6 +843,7 @@ function build() {
   const lc = document.getElementById("cam").components["look-controls"];
   if (lc && lc.pitchObject) lc.pitchObject.rotation.x = -0.55;
 
+  setStage(0);                                // start in the lobby: list forward, no table
   refresh();
   loadCats();
   setInterval(dataTick, 1000);
@@ -928,7 +930,7 @@ function buildLobby(market) {
                      { size: 0.0058, r: 0.013, color: C.panel, enabled: inLobby });
   UI.actTabs = [["positions", "Positions"], ["orders", "Orders"], ["history", "History"]].map(([id, name], i) => {
     const b = button(L, name, -0.2765 + i * 0.079, 0.15, 0.075, 0.026, () => { state.activity = id; state.page = 0; actLoad(); refresh(); },
-                     { size: 0.0052, r: 0.013, color: C.panel, enabled: () => inLobby() && !!state.activity });
+                     { size: 0.006, r: 0.013, color: C.panel, enabled: () => inLobby() && !!state.activity });
     b.id = id;
     return b;
   });
@@ -937,7 +939,7 @@ function buildLobby(market) {
   for (let i = 0; i < 16; i++) {
     const tab = { name: "" };
     tab.b = button(L, "", -0.2765 + (i % 8) * 0.079, 0.15 - Math.floor(i / 8) * 0.031, 0.075, 0.026,
-                   () => selectCat(tab.name), { size: 0.0052, r: 0.013, color: C.panel, enabled: () => inLobby() && !!tab.name && !state.activity });
+                   () => selectCat(tab.name), { size: 0.006, r: 0.013, color: C.panel, enabled: () => inLobby() && !!tab.name && !state.activity });
     TABS.push(tab);
   }
   for (let i = 0; i < 6; i++) {
@@ -946,11 +948,11 @@ function buildLobby(market) {
     const b = card.b = button(L, "", x, y, 0.30, 0.082, () => { UI.fromCard = card; return card.act ? openActivity(card.act) : openMarket(card.m); },
                               { r: 0.014, enabled: () => inLobby() && (!!card.m || !!(card.act && card.act.ticker)) });
     card.icon = iconMesh(b.el, 0.024, -0.126, 0.02, b.tz);
-    card.title = label(b.el, "", -0.138, 0.032, b.tz, 0.0062, C.text, "left", 0.165, "top");
-    card.foot  = label(b.el, "", -0.138, -0.029, b.tz, 0.0054, C.dim, "left");
+    card.title = label(b.el, "", -0.138, 0.032, b.tz, 0.007, C.text, "left", 0.13, "top");
+    card.foot  = label(b.el, "", -0.138, -0.029, b.tz, 0.0062, C.dim, "left");
     card.rows = [0.015, -0.015].map((ry) => ({
       chip: slab(b.el, 0.005, 0.022, 0.002, C.line, { r: 0.0025, order: 2, pos: `0.142 ${ry} ${b.tz}` }),
-      name: label(b.el, "", 0.092, ry, b.tz, 0.0056, C.dim, "right"),
+      name: label(b.el, "", 0.092, ry, b.tz, 0.0064, "#d4dae1", "right"),
       pct:  label(b.el, "", 0.136, ry, b.tz, 0.0098, C.text, "right")
     }));
     CARDS.push(card);
@@ -999,7 +1001,7 @@ function buildMarket(market) {
                              { r: 0.012, enabled: () => inMarket() && !!rowOption(row.i) });
     row.chip = slab(b.el, 0.005, 0.03, 0.002, C.line, { r: 0.0025, order: 2, pos: `-0.134 0 ${b.tz}` });
     row.icon = iconMesh(b.el, 0.026, -0.112, 0, b.tz);
-    row.name = label(b.el, "", -0.124, 0.006, b.tz, 0.0064, C.text, "left");
+    row.name = label(b.el, "", -0.124, 0.006, b.tz, 0.0074, C.text, "left");
     row.mine = label(b.el, "", -0.124, -0.013, b.tz, 0.005, C.green, "left");
     row.pct = label(b.el, "", 0.134, 0, b.tz, 0.012, C.text, "right");
     ROWS.push(row);
@@ -1111,12 +1113,30 @@ function openMarket(m) {
   syncPicksFor(m);
   showLegs(); lockFingers(); refresh();
   UI.graph.reveal();
-  growIntoBoard(UI.fromCard); UI.fromCard = null;
-  courtShow(!!m.hoops);                  // the court is only for basketball
+  growIntoBoard(UI.fromCard, () => { if (inMarket() && state.market === m) courtShow(!!m.hoops); });   // the court is only for basketball
+  UI.fromCard = null;
   last.game = Date.now(); pollOptions(viewOptions(), m);
 }
 // the card you pressed lifts off and grows into the board; then it fades and the market is underneath
-function growIntoBoard(card) {
+const STAGE_LOBBY = { y: 0.235, z: 0.0, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
+function setStage(k) {
+  state.stage = k;
+  const mix = (a, b) => a + (b - a) * k, o = UI.lobby.object3D;
+  o.position.set(0, mix(STAGE_LOBBY.y, STAGE_BOARD.y), mix(STAGE_LOBBY.z, STAGE_BOARD.z));
+  o.rotation.x = THREE.MathUtils.degToRad(mix(STAGE_LOBBY.rx, STAGE_BOARD.rx));
+  const b = UI.base.object3D, g = Math.max(0.0001, easeBack(clamp(k, 0, 1)));
+  b.visible = k > 0.01;
+  b.scale.set(0.55 + 0.45 * g, 1, 0.55 + 0.45 * g);                 // the table grows out from its middle
+  b.position.y = -0.015 * (1 - k);
+}
+// opening a market: the list slides back and the table grows in, then the pressed card grows into the board
+function growIntoBoard(card, after) {
+  UI.trans = true;
+  UI.lobby.setAttribute("visible", true); UI.game.setAttribute("visible", false);
+  const from = state.stage || 0;
+  tween("stage", 420, (k) => setStage(from + (1 - from) * easeOut(k)), () => { growCard(card); if (after) after(); });
+}
+function growCard(card) {
   const g = UI.ghost, o = g.object3D, mat = g.getObject3D("mesh").material;
   const fx = card ? card.b.el.object3D.position.x : 0, fy = card ? card.b.el.object3D.position.y : 0;
   const sx = card ? 0.30 / 0.66 : 0.6, sy = card ? 0.082 / 0.42 : 0.6;
@@ -1145,7 +1165,10 @@ function shrinkIntoCard(ticker) {
     o.position.set(tx * a, ty * a, 0.012 + 0.02 * Math.sin(Math.PI * a));
     o.scale.set(1 + (sx - 1) * a, 1 + (sy - 1) * a, 1);
     mat.opacity = SEE * (1 - span(k, 0.35, 1));
-  }, () => { g.setAttribute("visible", false); mat.opacity = SEE; });
+  }, () => {
+    g.setAttribute("visible", false); mat.opacity = SEE;
+    if (!inMarket()) { const from = state.stage; tween("stage", 420, (k) => setStage(from * (1 - easeOut(k)))); }   // list slides forward, table goes
+  });
 }
 // the court draws itself out from the center circle and the hoops rise; going away, it all pulls back in
 function courtShow(on) {
@@ -1533,7 +1556,7 @@ function refreshLobby() {
     card.b.el.setAttribute("visible", !!m);
     if (!m) return;
     card.title.object3D.position.x = setIcon(card.icon, m.image) ? -0.11 : -0.138;
-    card.title.setAttribute("value", trunc(m.title, 46));
+    card.title.setAttribute("value", trunc(m.title, 40));
     const mine = stakedOn(m), live = m.sport && m.live;
     card.foot.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : whenText(m));
     card.foot.setAttribute("color", mine > 0 ? C.green : live ? C.red : C.dim);
@@ -1541,7 +1564,7 @@ function refreshLobby() {
     card.rows.forEach((row, k) => {
       const o = m.opts[k];
       row.chip.setAttribute("visible", !!o);
-      row.name.setAttribute("value", o ? trunc(o.name, 13) : ""); row.pct.setAttribute("value", o ? pct(o.price) : "");
+      row.name.setAttribute("value", o ? trunc(o.name, 12) : ""); row.pct.setAttribute("value", o ? pct(o.price) : "");
       if (o) row.chip.setColor(o.color);
     });
   });
@@ -1850,7 +1873,7 @@ function refreshActivity() {
     card.b.el.setAttribute("visible", !!it);
     if (!it) return;
     card.title.object3D.position.x = setIcon(card.icon, it.img) ? -0.11 : -0.138;
-    card.title.setAttribute("value", trunc(it.title || "", 46));
+    card.title.setAttribute("value", trunc(it.title || "", 40));
     card.foot.setAttribute("value", it.foot || ""); card.foot.setAttribute("color", C.dim);
     [[it.a, it.av], [it.b, it.bv]].forEach(([name, val], k) => {
       const row = card.rows[k];
