@@ -135,6 +135,10 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Not built: releasing locks left over after a page reload (the app forgets picks; locks stay in the contract). The explorer's /tx/ and /address/ link format is assumed, not checked.
 - Next for Brian: open Blockchain setup on the PC, fund the wallet at faucet.circle.com (Arc Testnet), press Deploy, send Claude the contract address; then fund the headset's wallet the same way.
 
+## Escrow contract deployed, Nov 17
+- Brian deployed TabletopEscrow from the in-app panel on his PC: 0xB042A8BF2c3a65093967c9Ef053bFD11d145Ee0d on Arc testnet (chain 5042002). Confirmed by Claude via RPC: 1693 bytes of code, totalLocked() = 0. Hardcoded in SETTINGS.arc.escrow. This is the address for the README and Devpost.
+- Not yet seen working: a real placePick or cashOut from the app.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
