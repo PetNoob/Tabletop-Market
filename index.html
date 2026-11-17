@@ -720,12 +720,22 @@ function tickerLabel(parent, x, y, z, size, color, align) {
 }
 function tkSlot(el, i) {
   const tk = el.tk;
-  if (!tk.slots[i]) tk.slots[i] = { a: label(el, "", 0, 0, 0, tk.size * GLYPH, tk.color, "center"), b: null, x: 0 };
+  if (!tk.slots[i]) {
+    tk.slots[i] = { a: label(el, "", 0, 0, 0, tk.size * GLYPH, tk.color, "center"), b: null, x: 0 };
+    tkWhenReady(el, tk.slots[i].a);
+  }
   return tk.slots[i];
 }
 function tkSlotB(el, s) {
-  if (!s.b) { s.b = label(el, "", s.x, 0, 0, el.tk.size * GLYPH, el.tk.color, "center"); s.b.object3D.visible = false; }
+  if (!s.b) { s.b = label(el, "", s.x, 0, 0, el.tk.size * GLYPH, el.tk.color, "center"); s.b.object3D.visible = false; tkWhenReady(el, s.b); }
   return s.b;
+}
+// a new digit is finished being set up a moment after it is made, which puts it back in the middle;
+// so once it is ready, put every digit of that number back in its own place
+function tkWhenReady(el, txt) {
+  if (txt.hasLoaded) return;
+  txt.addEventListener("loaded", () => tkLayout(el, Array.from({ length: el.tk.slots.length }, (_, i) =>
+    String(el.tk.text).split("").reverse()[i] || " ")), { once: true });
 }
 function tkChar(txt, c) { if (txt.tkc !== c) { txt.tkc = c; txt.setAttribute("value", c); } }
 // put a character on the wheel at angle a (0 = facing you, positive = turned upward)

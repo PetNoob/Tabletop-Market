@@ -195,6 +195,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17 fixes (UNTESTED): odds wheels now read real character widths from the loaded font (`fontInfo`/`tkAdvance`, same formula A-Frame uses) and draw at normal size (GLYPH 1), so spacing matches other text. The amount panel opens only from a pill: duel answer rows no longer open it, and pills ignore touches during arrival (`UI.arriving`, 1.9 s finger lock on open). Table, court lines and hoops scaled to COURT_SCALE 0.85; pills narrower (0.282 wide at x +-0.146); move handle at z 0.275; "over the court" cash-out zone shrunk to match.
 
+- Nov 17: crypto lobby cards showed crushed odds digits on the lower rows. Cause (diagnosed, not confirmed): wheel slots are created lazily and positioned at once, then A-Frame's position component initializes on "loaded" and resets x to 0. Fix: `tkWhenReady` re-runs `tkLayout` for that ticker when a new slot's entity loads.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
