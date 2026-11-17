@@ -103,7 +103,7 @@ const SETTINGS = {
     escrow: "0xB042A8BF2c3a65093967c9Ef053bFD11d145Ee0d",   // the deployed TabletopEscrow contract. Empty = use the one deployed from this browser, if any
     dollarsToUsdc: 0.01 // each app dollar locks this much test USDC (the faucet only gives 10 per hour)
   },
-  liveBudget: 10,       // live mode only: how many real dollars this session may spend in total
+  liveBudget: 10,       // live mode only: shown until the real Gemini balance arrives (and used if the server cannot fetch it)
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
   fallbackCategories: ["Sports", "Crypto", "Economics", "Commodities", "Politics", "Culture", "Weather", "Business", "Tech"],
@@ -1045,6 +1045,7 @@ function confirmPick() {
     LIVE.orders.push({ id: r.orderId, side: "buy", symbol: leg.o.sym, outcome: leg.side, filled, avg });
     if (filled <= 0) return panelNote("Order did not fill. Try again");
     addPick(m, leg, filled * avg, filled, "gemini order " + r.orderId);
+    setTimeout(liveBalance, 1500);
     closePanel();
   }).catch((err) => { LIVE.busy = false; panelNote(trunc("Gemini: " + err.message, 38)); });
 }
@@ -1076,10 +1077,21 @@ async function unlockLive(pass) {
   LIVE.on = true; LIVE.cap = r.maxOrderUsd || 1;
   stopSim();
   state.picks = {}; state.balance = S.liveBudget; state.amount = Math.min(state.amount, LIVE.cap);
-  UI.balTitle.setAttribute("value", r.sandbox ? "Live budget (practice)" : "Live budget (REAL money)");
+  UI.balTitle.setAttribute("value", r.sandbox ? "Gemini balance (practice)" : "Gemini balance (REAL money)");
   UI.interest.setAttribute("value", "Orders up to " + money(LIVE.cap) + " each on Gemini");
   refresh();
+  liveBalance();
+  if (!LIVE.timer) LIVE.timer = setInterval(() => { if (LIVE.on && !LIVE.busy) liveBalance(); }, 20000);
   return r;
+}
+// ask the server for the account's real dollar balance and show it on the table
+function liveBalance() {
+  if (!LIVE.on) return;
+  serverCall("/balance", {}).then((b) => {
+    if (!LIVE.on || !isFinite(b.usd)) return;
+    state.balance = Math.round(b.usd * 100) / 100;
+    refresh();
+  }).catch((err) => console.warn("Gemini balance:", err.message));
 }
 
 /* ---------- data from Gemini ---------- */
@@ -1456,6 +1468,7 @@ function grabDone(cashOut) {
     grab.pending = false;
     if (filled <= 0 || !now) { cashNote(i, "Could not sell right now"); pile.release(null); return endGrab(); }
     settleCash(i, Math.min(1, filled / now.pos.shares), filled * avg, "gemini order " + r.orderId);
+    setTimeout(liveBalance, 1500);
     endGrab();
   }).catch((err) => { grab.pending = false; cashNote(i, trunc("Gemini: " + err.message, 38)); pile.release(null); endGrab(); });
 }

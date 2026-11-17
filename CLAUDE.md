@@ -156,6 +156,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Brian deposited and placed a real $1 order from the app; he says it worked and he "lost 1 dollar" (not yet clear whether he sold it back or the position fell). Whether the live SELL (cash-out) works is not confirmed. README updated to say a real buy was placed.
 
+- Nov 17: Brian noticed the live table balance did not match Gemini. Added server route /balance (POST /v1/balances, USD "available") and `liveBalance()` in the app: called at unlock, 1.5 s after each live buy or sell, and every 20 s. The card title is now "Gemini balance (REAL money)". Needs the updated worker.js pasted into Cloudflare. Not tested.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

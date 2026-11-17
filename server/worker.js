@@ -20,6 +20,7 @@
    Gemini endpoints used here (all need the secret):
      POST /v1/prediction-markets/order         place a buy or sell
      POST /v1/prediction-markets/positions     what the account holds
+     POST /v1/balances                         how many dollars the account has
      GET  /v1/prediction-markets/terms/status  has the account accepted the terms
    ====================================================================== */
 
@@ -81,6 +82,13 @@ export default {
       }
 
       if (path === "/positions") return reply(await gemini(env, "POST", "/v1/prediction-markets/positions", {}));
+
+      // the account's real US dollar balance, so the table shows what Gemini shows
+      if (path === "/balance") {
+        const list = await gemini(env, "POST", "/v1/balances", {});
+        const usd = (Array.isArray(list) ? list : []).find((b) => String(b.currency).toUpperCase() === "USD");
+        return reply({ usd: usd ? parseFloat(usd.available) : 0, total: usd ? parseFloat(usd.amount) : 0 });
+      }
 
       return reply({ error: "Unknown path" }, 404);
     } catch (err) {
