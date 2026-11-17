@@ -1121,7 +1121,7 @@ async function unlockLive(pass) {
   UI.interest.setAttribute("value", "Orders up to " + money(LIVE.cap) + " each on Gemini");
   refresh();
   liveBalance();
-  if (!LIVE.timer) LIVE.timer = setInterval(() => { if (LIVE.on && !LIVE.busy) liveBalance(); }, 20000);
+  if (!LIVE.timer) LIVE.timer = setInterval(() => { if (LIVE.on && !LIVE.busy) liveBalance(); }, 5000);
   return r;
 }
 // ask the server for the account's real dollar balance and show it on the table
