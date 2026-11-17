@@ -203,6 +203,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Flow (`arcBridge`, from Circle's Ethereum-to-Arc forwarding quickstart, reversed): fee quote, approve USDC (0x3600...) to the messenger, depositForBurnWithHook(total, 6, wallet as bytes32, usdc, 0, maxFee, 1000, hook "cctp-forward"), then `bridgeWatch` polls /v2/messages/26?transactionHash= until `forwardTxHash` (the Base mint by Circle). Runs inside ARC.queue. Resumes watching after a reload.
 - UI: "Move to Gemini" section in the Blockchain setup panel (0.25 / 0.5 / 1 test USDC) with four steps and receipt links (Arc explorer for the burn, sepolia.basescan.org for the mint). Shows in Activity > History as "Arc to Base".
 
+- Nov 17: Brian confirmed the bridge: steps 1, 2 and 3 all got real check marks (burn on Arc, Circle confirmation, mint on Base Sepolia). README updated: bridge section, CCTP addresses, Arc award listed, Activity/balance/pictures/animations, new Gemini endpoints.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
