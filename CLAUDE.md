@@ -191,6 +191,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Odds wheels (Nov 17, UNTESTED, replaces the slide ticker): Brian wanted bike-lock style rolling. `tickerLabel` is now a group of per-character wheels (right-aligned, widths from CHAR_W). On a change on the same market, only changed digits turn, through the digits in between, upward for a rise and downward for a fall (tilted on a small drum, R = 0.85 x size), with a green or red flash. Pills: no flash. Each wheel has a second text created only when it first turns.
 
+- Nov 17: Brian said the wheels are pretty good but digits looked cramped and slightly too big. Digits now drawn at 86 percent (GLYPH) with wider slots (CHAR_W). SETTINGS.distance 0.75 to 0.67 so everything is a bit easier to reach.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

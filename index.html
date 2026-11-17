@@ -83,7 +83,7 @@
    ====================================================================== */
 const SETTINGS = {
   tableHeight:  0.75,   // height of your table from the floor (0.75 m is about 30 inches)
-  distance:     0.75,   // how far in front of you it first appears
+  distance:     0.67,   // how far in front of you it first appears
   courtScale:   1.0,    // 1.0 = court is 60 cm long. 1.5 = bigger, 0.7 = smaller
   startBalance: 100,    // test balance in dollars
   interestRate: 4.1,    // shown on the balance card (preview only)
@@ -681,7 +681,8 @@ const span = (k, a, b) => clamp((k - a) / (b - a), 0, 1);
    Each character is its own little wheel. When the number changes, only the digits that change turn,
    and they turn through the digits in between (93% -> 95% turns the 3 through 4 to 5). Going up turns them
    upward, going down turns them downward. The number flashes green or red while it turns. */
-const CHAR_W = (c) => (c === "." || c === "," ? 0.5 : c === "%" ? 1.25 : c === "-" ? 0.7 : c === " " ? 0.6 : 0.95);
+const CHAR_W = (c) => (c === "." || c === "," ? 0.55 : c === "%" ? 1.4 : c === "-" ? 0.8 : c === " " ? 0.6 : 1.08);
+const GLYPH = 0.86;   // each digit is drawn a bit smaller than its slot, so neighbours never touch
 function tickerLabel(parent, x, y, z, size, color, align) {
   const el = mk("a-entity", { position: `${x} ${y} ${z}` }, parent);           // always right-aligned at x
   el.tk = { size, base: color, color, text: "", key: "", flash: true, slots: [] };
@@ -689,11 +690,11 @@ function tickerLabel(parent, x, y, z, size, color, align) {
 }
 function tkSlot(el, i) {
   const tk = el.tk;
-  if (!tk.slots[i]) tk.slots[i] = { a: label(el, "", 0, 0, 0, tk.size, tk.color, "center"), b: null, x: 0 };
+  if (!tk.slots[i]) tk.slots[i] = { a: label(el, "", 0, 0, 0, tk.size * GLYPH, tk.color, "center"), b: null, x: 0 };
   return tk.slots[i];
 }
 function tkSlotB(el, s) {
-  if (!s.b) { s.b = label(el, "", s.x, 0, 0, el.tk.size, el.tk.color, "center"); s.b.object3D.visible = false; }
+  if (!s.b) { s.b = label(el, "", s.x, 0, 0, el.tk.size * GLYPH, el.tk.color, "center"); s.b.object3D.visible = false; }
   return s.b;
 }
 function tkChar(txt, c) { if (txt.tkc !== c) { txt.tkc = c; txt.setAttribute("value", c); } }
