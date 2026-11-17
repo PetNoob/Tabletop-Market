@@ -1071,6 +1071,8 @@ function tradePrice(leg, side) {
 async function unlockLive(pass) {
   LIVE.pass = pass;
   const r = await serverCall("/unlock", {});
+  // the server asks Gemini about the terms; if Gemini refused, the key is not working, so do not turn live mode on
+  if (r.terms && r.terms.error) { LIVE.pass = ""; throw new Error("Gemini rejected the key: " + r.terms.error); }
   LIVE.on = true; LIVE.cap = r.maxOrderUsd || 1;
   stopSim();
   state.picks = {}; state.balance = S.liveBudget; state.amount = Math.min(state.amount, LIVE.cap);

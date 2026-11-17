@@ -150,6 +150,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Gemini key replaced (the first one was exposed in a screenshot; Brian was told to delete it). /status showed tradingConfigured:true. Passcode unlock worked.
 - First pick showed "This market cannot be traded now": the app treated a pubticker 404 (`o.dead`) as untradable, but pubticker 404s for many open markets. Fixed: options keep `bid`, `ask` and `closed` (contract marketState) from the events list; live buys are refused only if there is no symbol or marketState is not "open".
 
+- Next live attempt gave "invalid api key" from Gemini. Likely the Cloudflare secret holds the deleted old key, or key/secret were swapped. Brian told to make a fresh key and replace both values. Unlock now fails with Gemini's message if the terms-status call is rejected.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
