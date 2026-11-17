@@ -171,6 +171,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - History = Arc receipts. Pressing a position or order opens that market via GET /v1/prediction-markets/events/{eventTicker}.
 - Needs worker.js re-pasted into Cloudflare (adds /balance and /history).
 
+- Nov 17: Brian re-pasted the worker and confirmed "it works" for the Activity tab, live balance and positions after reload.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
