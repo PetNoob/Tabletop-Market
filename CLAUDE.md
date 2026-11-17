@@ -143,6 +143,9 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Brian asked for about 1,000 bills and a heap made only of bills shaped into a cone. MAXB is now 1000 (instance capacity CAP 1300), the solid core is hidden, and `layout(n)` fills the whole cone volume (equal space per note, bottom to top, more notes near the outside). A new pick uses at most 400 notes (`unitFor` units now start at $0.01) so it can grow. The drop-in animation takes about a second however many notes arrive.
 - Risk to check in the headset: frame rate with up to 2,000 moving notes on two piles.
 
+## Gemini key created, Nov 17
+- Brian created the Gemini API key. Worker is deployed at https://tabletop-market.brianlinxd.workers.dev (/status answered tradingConfigured:false before secrets were added). SETTINGS.serverUrl now points to it, so the welcome screen shows "Owner: turn on live trading".
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
