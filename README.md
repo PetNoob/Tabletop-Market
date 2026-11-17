@@ -45,7 +45,7 @@ We want judges to be able to check every claim, so here it is plainly.
 | Stake locked on Arc | **Real transactions on Arc's testnet** (free test USDC, not real money). |
 | "Earning 4.1% while idle" | **Preview only.** Not a real yield. |
 | Simulate odds | **Simulated.** Labeled on screen whenever it is on. |
-| Real orders on Gemini (live mode) | **Built, not yet working end to end.** See below. |
+| Real orders on Gemini (live mode) | **Real, owner only.** A real $1 order was placed from the app on Nov 17, 2026. See below. |
 
 ---
 
@@ -114,7 +114,7 @@ Placing a real Gemini order needs a secret API key, which must never be in a pub
 - The key is created with the **Trading** role only (no withdrawals).
 - Simulated odds are disabled in live mode.
 
-**Status:** the server and the app side are written. We have not yet been able to create the Gemini API key (the account's passkey check fails when creating keys), so no real order has been placed from the app.
+**Status:** working. On Nov 17, 2026 a real $1 buy order was placed on Gemini from the app, using the owner's own funds.
 
 ### The mixed reality part
 
@@ -173,7 +173,7 @@ A-Frame 1.6, WebXR (hand tracking, passthrough), three.js, plain JavaScript, eth
 
 ## What's next
 
-- Finish real Gemini trading, then let any user trade on their own Gemini account (Gemini supports OAuth with an `orders:create` scope), instead of the owner's.
+- Let any user trade on their own Gemini account (Gemini supports OAuth with an `orders:create` scope), instead of the owner's.
 - Pay winnings from the contract when a market settles, using Gemini's official result.
 - Bring USDC onto Arc with Circle's CCTP or Gateway, and move it to Gemini, so the money path is onchain end to end.
 - Restore picks after a reload from the contract's onchain record.

@@ -154,6 +154,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: the "invalid api key" was a typo (0 vs O) in the Cloudflare value. After fixing it, unlock worked and a $1 live buy reached Gemini, which answered "insufficient funds". The full signed order path is confirmed working; the account needs a USD deposit.
 
+- Nov 17: Brian deposited and placed a real $1 order from the app; he says it worked and he "lost 1 dollar" (not yet clear whether he sold it back or the position fell). Whether the live SELL (cash-out) works is not confirmed. README updated to say a real buy was placed.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
