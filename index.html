@@ -750,7 +750,12 @@ function setTicker(el, text, key, base) {
     }
     seqs.push(seq);
   }
-  if (tk.flash) tkColor(el, dir > 0 ? C.green : C.red);
+  // only the digits that turn flash green or red; the rest keep their normal color
+  if (tk.flash) seqs.forEach((seq, i) => {
+    if (seq.length < 2) return;
+    const s = tk.slots[i], c = dir > 0 ? C.green : C.red;
+    s.a.setAttribute("color", c); tkSlotB(el, s).setAttribute("color", c);
+  });
   const steps = Math.max.apply(null, seqs.map((q) => q.length - 1)), Q = Math.PI / 2;
   tween("tick" + el.object3D.uuid, 360 + 80 * steps, (k) => {
     const e = easeOut(k);
