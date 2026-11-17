@@ -104,6 +104,7 @@ const SETTINGS = {
     dollarsToUsdc: 0.01 // each app dollar locks this much test USDC (the faucet only gives 10 per hour)
   },
   liveBudget: 10,       // live mode only: shown until the real Gemini balance arrives (and used if the server cannot fetch it)
+  oddsAnim: true,       // numbers slide up or down and flash green or red when the odds change
   icons: true,          // show Gemini's market pictures (needs serverUrl, which passes them through)
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
@@ -676,6 +677,46 @@ const easeOut = (k) => 1 - Math.pow(1 - k, 3);
 const easeBack = (k) => { const c = 1.7; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2); };   // overshoots a little, then settles
 const span = (k, a, b) => clamp((k - a) / (b - a), 0, 1);
 
+/* ---------- numbers that roll when they change ----------
+   A ticker label is two texts in the same spot. When the value changes, the old one slides out and fades,
+   the new one slides in from below (going up) or above (going down), flashes green or red, and settles. */
+function tickerLabel(parent, x, y, z, size, color, align) {
+  const el = label(parent, "", x, y, z, size, color, align);
+  el.twin = label(parent, "", x, y, z, size, color, align);
+  el.tk = { y0: y, h: size * 1.7, base: color, text: "", key: "", flash: true };
+  return el;
+}
+function setTicker(el, text, key, base) {
+  const tk = el.tk;
+  if (!tk) { el.setAttribute("value", text); return; }
+  if (base) tk.base = base;
+  if (text === tk.text && key === tk.key) return;
+  const oldText = tk.text, sameKey = key === tk.key && oldText !== "" && text !== "";
+  tk.text = text; tk.key = key;
+  el.setAttribute("value", text);
+  const num = (s) => parseFloat(String(s).replace(/[^0-9.\-]/g, ""));
+  const a = num(oldText), b = num(text);
+  if (!S.oddsAnim || !sameKey || !isFinite(a) || !isFinite(b) || a === b) {          // nothing to animate: just show it
+    tween("tick" + el.object3D.uuid, 1, () => {});
+    el.twin.setAttribute("value", ""); el.object3D.position.y = tk.y0; el.object3D.scale.set(1, 1, 1);
+    el.setAttribute("color", tk.base); setTextOpacity(el, 1);
+    return;
+  }
+  const dir = b > a ? 1 : -1;
+  el.twin.setAttribute("value", oldText); el.twin.setAttribute("color", tk.base);
+  el.setAttribute("color", tk.flash ? (dir > 0 ? C.green : C.red) : tk.base);
+  tween("tick" + el.object3D.uuid, 520, (k) => {
+    const e = easeOut(k), s = 1 + 0.16 * Math.sin(Math.PI * k);
+    el.object3D.position.y = tk.y0 - dir * tk.h * (1 - e);
+    el.twin.object3D.position.y = tk.y0 + dir * tk.h * e;
+    setTextOpacity(el, e); setTextOpacity(el.twin, 1 - e);
+    el.object3D.scale.set(s, s, 1);
+  }, () => {
+    el.twin.setAttribute("value", ""); el.object3D.scale.set(1, 1, 1); el.object3D.position.y = tk.y0; setTextOpacity(el, 1);
+    setTimeout(() => { if (tk.text === text) el.setAttribute("color", tk.base); }, 650);   // the flash fades back
+  });
+}
+
 /* ---------- the price graph ---------- */
 function makeGraph(parent, x, y, w, h) {
   const holder = mk("a-entity", { position: `${x} ${y} 0.005` }, parent);
@@ -953,7 +994,7 @@ function buildLobby(market) {
     card.rows = [0.015, -0.015].map((ry) => ({
       chip: slab(b.el, 0.005, 0.022, 0.002, C.line, { r: 0.0025, order: 2, pos: `0.142 ${ry} ${b.tz}` }),
       name: label(b.el, "", 0.092, ry, b.tz, 0.0064, "#d4dae1", "right"),
-      pct:  label(b.el, "", 0.136, ry, b.tz, 0.0098, C.text, "right")
+      pct:  tickerLabel(b.el, 0.136, ry, b.tz, 0.0098, C.text, "right")
     }));
     CARDS.push(card);
   }
@@ -1003,7 +1044,7 @@ function buildMarket(market) {
     row.icon = iconMesh(b.el, 0.026, -0.112, 0, b.tz);
     row.name = label(b.el, "", -0.124, 0.006, b.tz, 0.0074, C.text, "left");
     row.mine = label(b.el, "", -0.124, -0.013, b.tz, 0.005, C.green, "left");
-    row.pct = label(b.el, "", 0.134, 0, b.tz, 0.012, C.text, "right");
+    row.pct = tickerLabel(b.el, 0.134, 0, b.tz, 0.012, C.text, "right");
     ROWS.push(row);
   }
   UI.rPage = label(B, "", -0.23, -0.176, 0.006, 0.0062, C.dim);
@@ -1033,7 +1074,8 @@ function buildMarket(market) {
                      { r: 0.029, d: 0.014, opacity: 0.96, enabled: () => inMarket() && state.sel === null });
     b.icon = iconMesh(b.el, 0.036, -0.124, 0, b.tz);
     b.name = label(b.el, "", -0.136, 0, b.tz, 0.0088, C.text, "left");
-    b.pct = label(b.el, "", 0.136, 0, b.tz, 0.0155, C.text, "right");
+    b.pct = tickerLabel(b.el, 0.136, 0, b.tz, 0.0155, C.text, "right");
+    b.pct.tk.flash = false;                       // the pill is already colored, so it only slides and pulses
     return b;
   });
 
@@ -1100,7 +1142,8 @@ function showLegs() {
   legs.forEach((leg, i) => {
     UI.pills[i].el.setColor(leg.color);
     const ink = inkFor(leg.color);
-    UI.pills[i].name.setAttribute("color", ink); UI.pills[i].pct.setAttribute("color", ink);
+    UI.pills[i].name.setAttribute("color", ink); UI.pills[i].pct.setAttribute("color", ink); UI.pills[i].pct.tk.base = ink;
+    UI.pills[i].pct.twin.setAttribute("color", ink);
     UI["rim" + i].setAttribute("color", leg.color);
     PILES[i].clear();
   });
@@ -1564,7 +1607,7 @@ function refreshLobby() {
     card.rows.forEach((row, k) => {
       const o = m.opts[k];
       row.chip.setAttribute("visible", !!o);
-      row.name.setAttribute("value", o ? trunc(o.name, 12) : ""); row.pct.setAttribute("value", o ? pct(o.price) : "");
+      row.name.setAttribute("value", o ? trunc(o.name, 12) : ""); setTicker(row.pct, o ? pct(o.price) : "", o ? m.ticker + "|" + k : "");
       if (o) row.chip.setColor(o.color);
     });
   });
@@ -1593,7 +1636,7 @@ function refreshMarket() {
     row.name.object3D.position.y = mine > 0 ? 0.006 : 0;
     row.name.object3D.position.x = row.mine.object3D.position.x = setIcon(row.icon, o.image) ? -0.094 : -0.124;
     row.mine.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : "");
-    row.pct.setAttribute("value", pct(o.price));
+    setTicker(row.pct, pct(o.price), m.ticker + "|" + idx);
   });
   const pages = rowPages(m);
   UI.rPage.setAttribute("value", pages > 1 ? `Answers ${m.rowPage + 1} / ${pages}` : "");
@@ -1617,7 +1660,7 @@ function refreshMarket() {
     const p = legPrice(leg), pos = state.picks[pickKey(m, leg)], pile = PILES[i];
     UI.pills[i].name.object3D.position.x = setIcon(UI.pills[i].icon, m.kind === "duel" ? leg.o.image : "") ? -0.1 : -0.136;
     UI.pills[i].name.setAttribute("value", trunc(leg.name, 15));
-    UI.pills[i].pct.setAttribute("value", pct(p));
+    setTicker(UI.pills[i].pct, pct(p), m.ticker + "|" + leg.i + "|" + leg.side);
     if (pos) {
       const value = pos.shares * p, change = value - pos.stake, unit = pos.unit || (pos.unit = unitFor(pos.stake));
       pile.setScale(scaleFor(unit));
@@ -1878,7 +1921,7 @@ function refreshActivity() {
     [[it.a, it.av], [it.b, it.bv]].forEach(([name, val], k) => {
       const row = card.rows[k];
       row.chip.setAttribute("visible", k === 0 && !!name); if (k === 0) row.chip.setColor(it.color || C.line);
-      row.name.setAttribute("value", trunc(name || "", 16)); row.pct.setAttribute("value", val || "");
+      row.name.setAttribute("value", trunc(name || "", 16)); setTicker(row.pct, val || "", "act|" + state.activity + "|" + (it.ticker || "") + "|" + (it.sym || "") + "|" + (it.outcome || "") + "|" + k);
     });
   });
 }

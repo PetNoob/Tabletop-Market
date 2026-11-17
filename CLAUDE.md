@@ -187,6 +187,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - `UI.base` holds the table slabs. `setStage(k)`: 0 = lobby (list at STAGE_LOBBY, forward and lower, table hidden), 1 = market (list at the back, table grown in with a slight overshoot). Opening: stage slides to 1 (420 ms), then the card grows into the board, then the court draws in. Back: the board shrinks into its card, then the stage slides to 0. Balance card and move handle stay in the lobby. Hand brush on the base only counts at stage > 0.5.
 - Readability: C.dim brightened to #b0b8c3, panels 93 percent solid (SEE), lobby card titles, answer names, feet, tabs, board answers and graph labels all larger.
 
+- Odds ticker (Nov 17, UNTESTED): `tickerLabel`/`setTicker` give the lobby card odds, board answer odds, pill odds and Activity values a second text; on a change on the same market the old value slides out, the new slides in (up from below when rising), with a green or red flash (pills: slide and pulse only). `SETTINGS.oddsAnim` turns it off.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
