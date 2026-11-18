@@ -1309,7 +1309,7 @@ function featuredMarket() {
   if (!list.length) return null;
   const was = state.feat[state.cat], keep = was && list.find((m) => m.ticker === was);
   if (keep) return keep;
-  const pick = list.find((m) => m.kind === "duel" && m.sport && m.live) || list.find((m) => m.kind === "duel") || list[0];
+  const pick = list.find((m) => m.kind === "duel" && liveNow(m)) || list.find((m) => m.kind === "duel") || list[0];
   state.feat[state.cat] = pick.ticker;
   return pick;
 }
@@ -1589,7 +1589,7 @@ function makeLineChart(parent, x, y, w, h) {
 // chart ranges on the market board. Gemini keeps history only where trades happened:
 //   Live = 1-minute steps (since the game started, or the last hour), 1D = 15-minute steps, All = 1-hour steps
 //   (if those are too few, the 15-minute history is shown instead)
-function rangeOf(m) { return m.range || (m.sport && m.live ? "live" : "day"); }
+function rangeOf(m) { return m.range || (liveNow(m) ? "live" : "day"); }
 function setRange(id) {
   const m = state.market;
   if (!m || state.sim) return;
@@ -1622,7 +1622,7 @@ function rangePts(m, o) {
   const h = o.hr && o.hr[r];
   if (!h || !h.loaded) return null;
   if (r === "live") {
-    const from = m.sport && m.live && m.start ? m.start.getTime() - 600000 : Date.now() - 3600000;
+    const from = liveNow(m) && m.start ? m.start.getTime() - 600000 : Date.now() - 3600000;
     const p = h.pts.filter((q) => q.t >= from);
     return p.length >= 2 ? p : h.pts.slice(-60);
   }
@@ -2057,7 +2057,7 @@ function toMarket(e) {
   return { ticker: e.ticker, title: clean(e.title) || "Market", category: e.category || "", sub, image: e.imageUrl || "",
            kind: duel ? "duel" : "list", opts, sel: 0, rowPage: 0,
            court: isGame, hoops: isGame && /basketball/i.test(sub),
-           sport: e.category === "Sports", live: !!e.isLive, start: date(e.startTime), closes: date(e.expiryDate),
+           sport: e.category === "Sports", live: false, open: !!e.isLive, start: date(e.startTime), closes: date(e.expiryDate),
            volume: parseFloat(e.volume) || 0, tags: (e.tags || []).join(" "),
            smType: (e.sportsMarket && e.sportsMarket.type) || "", sk: String((e.sportsMarket && e.sportsMarket.sport) || "").toLowerCase() };
 }
@@ -2122,13 +2122,13 @@ async function loadCat(cat, more) {
     const offset = more ? (st.raw || st.markets.length) : 0, base = GEMINI + "/events?status=active";
     const url = cat.indexOf("search:") === 0 ? base + "&limit=12&offset=" + offset + "&search=" + encodeURIComponent(cat.slice(7)) :
                 cat === "All" ? base + "&limit=12&offset=" + offset :
-                cat === "Live" ? base + "&limit=30&offset=" + offset :
+                cat === "Live" ? base + "&category=Sports&sports_market_type=moneyline&limit=30&offset=" + offset :
                 base + "&category=" + encodeURIComponent(cat) + "&limit=12&offset=" + offset +
                 (cat === "Sports" ? "&sports_market_type=moneyline" : "");
     const j = await getJSON(url, 45000);
     let list = (Array.isArray(j) ? j : j.data || []).map(toMarket).filter(Boolean);
     const raw = Array.isArray(j) ? j.length : (j.data || []).length;
-    if (cat === "Live") list = list.filter((m) => m.live);              // Gemini has no live filter; live events come first
+    if (cat === "Live") list = list.filter((m) => liveNow(m));          // games being played right now (Gemini has no such filter)
     list = list.filter((m) => !m.sport || !m.smType || m.smType === "moneyline" || m.smType === "to_advance");
     const old = new Map(st.markets.map((m) => [m.ticker, m]));
     list.forEach((m) => {                                              // same market as before: keep its history and price times
@@ -2140,7 +2140,8 @@ async function loadCat(cat, more) {
     list.forEach((m) => { if (!keep.some((k) => k.ticker === m.ticker)) keep.push(m); });
     st.markets = keep; st.source = "live"; st.raw = offset + raw; st.savedAt = 0;
     snapSave(cat, keep);
-    st.total = cat === "Live" ? (raw === 0 || !list.length ? keep.length : keep.length + 1) :
+    const allLater = (j.data || []).every((e) => e.startTime && Date.parse(e.startTime) > Date.now());   // the rest have not started
+    st.total = cat === "Live" ? (raw === 0 || allLater ? keep.length : keep.length + 1) :
                raw === 0 || !j.pagination ? keep.length : Math.max(keep.length, j.pagination.total || 0);
   } catch (err) {
     console.warn("Gemini markets (" + cat + "):", err);
@@ -2235,18 +2236,29 @@ function stopSim() {
 }
 
 /* ---------- drawing the current state ---------- */
+// a game is live only while it is being played: ESPN's status when ESPN has the game, otherwise
+// it has started and is still within a normal game's length. (Gemini's isLive only means the market is open.)
+const GAME_HOURS = { basketball: 2.6, football: 3.6, soccer: 2.1, hockey: 2.8, baseball: 3.4 };
+function liveNow(m) {
+  if (!m || !m.sport || !m.start || m.saved || m.sample) return false;
+  const sc = m.kind === "duel" ? scoreFor(m) : null;
+  if (sc) return sc.state === "in";
+  const h = (Date.now() - m.start.getTime()) / 3600000;
+  return h >= 0 && h < (GAME_HOURS[sportKind(m)] || 3);
+}
 function whenText(m) {
   if (m.sample) return "Sample market";
-  if (m.sport && m.live) return "LIVE NOW";
+  if (liveNow(m)) return "LIVE NOW";
   const now = new Date(), midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
   const dayOf = (d) => Math.floor((d.getTime() - midnight) / 86400000);
-  const time = (d) => clean(d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }));
+  const time = (d) => clean(d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }).replace(/\s/g, " "));
   const day = (d) => clean(d.toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+  const when = (d) => { const n = dayOf(d); return (n === 0 ? "Today" : n === 1 ? "Tomorrow" : day(d)) + " at " + time(d); };
   if (m.sport && m.start) {
-    const n = dayOf(m.start);
-    return n === 0 ? (m.start < now ? "Started " : "Today ") + time(m.start) : n === 1 ? "Tomorrow " + time(m.start) : day(m.start) + " " + time(m.start);
+    if (m.start < now) { const sc = m.kind === "duel" ? scoreFor(m) : null; return sc && sc.state === "post" ? "Final" : "Awaiting result"; }
+    return when(m.start);
   }
-  if (m.closes) { const n = dayOf(m.closes); return "Closes " + (n === 0 ? "today " + time(m.closes) : n === 1 ? "tomorrow" : day(m.closes)); }
+  if (m.closes) { const n = dayOf(m.closes); return "Closes " + (n <= 1 ? when(m.closes).replace(/^T/, "t") : day(m.closes)); }
   return m.sub || "";
 }
 function refreshPanel() {
@@ -2305,7 +2317,7 @@ function fillFeatured(m) {
   F.title.object3D.position.x = F.status.object3D.position.x = x;
   F.sub.setAttribute("value", trunc(m.sub || m.category || "", 40));
   F.title.setAttribute("value", trunc(m.title, 56));
-  const sc = m.kind === "duel" ? scoreFor(m) : null, live = sc ? sc.state === "in" : !!(m.sport && m.live);
+  const sc = m.kind === "duel" ? scoreFor(m) : null, live = sc ? sc.state === "in" : !!(liveNow(m));
   F.status.setAttribute("value", live ? "LIVE" : whenText(m));
   F.status.setAttribute("color", live ? C.red : C.dim);
   F.livePulse = live;
@@ -2345,7 +2357,7 @@ function fillFeatured(m) {
 function fillCard(card, m) {
   card.m = m; card.act = null;
   const duel = m.kind === "duel", sc = duel ? scoreFor(m) : null, mine = stakedOn(m);
-  const live = sc ? sc.state === "in" : !!(m.sport && m.live);
+  const live = sc ? sc.state === "in" : !!(liveNow(m));
   card.head.setAttribute("value", trunc(m.sub || m.category || "", 24));
   card.stat.setAttribute("value", trunc(sc && sc.state !== "pre" ? (sc.state === "in" ? "LIVE " + sc.detail : sc.detail) : live ? "LIVE" : whenText(m), 20));
   card.stat.setAttribute("color", live ? C.red : C.dim);
@@ -2409,7 +2421,7 @@ function refreshMarket() {
   UI.title.object3D.position.x = setIcon(UI.titleIcon, m.image) ? -0.238 : -0.278;
   UI.title.setAttribute("value", trunc(m.title, 46));
   // the live line: period and clock when ESPN has the game, otherwise when it starts or closes
-  const sc = duel ? scoreFor(m) : null, liveNow = sc ? sc.state === "in" : !!(m.sport && m.live);
+  const sc = duel ? scoreFor(m) : null, liveNow = sc ? sc.state === "in" : !!(liveNow(m));
   const whenT = sc && sc.state !== "pre" ? (sc.state === "in" ? "LIVE  -  " + sc.detail : sc.detail) : liveNow ? "LIVE" : whenText(m);
   UI.when.setAttribute("value", whenT);
   UI.when.setAttribute("color", liveNow ? C.red : C.dim);
@@ -2436,7 +2448,7 @@ function refreshMarket() {
     b.el.object3D.visible = !state.sim;
     b.el.setColor(on ? "#3a3f47" : PANEL_BG);
     b.t.setAttribute("color", on ? C.text : C.dim);
-    if (b.id === "live") b.t.setAttribute("value", m.sport && m.live ? "Live" : "1H");
+    if (b.id === "live") b.t.setAttribute("value", liveNow(m) ? "Live" : "1H");
   });
   // answers on the board (answer lists only; a game's two sides are the chart labels and the pills)
   m.rowPage = clamp(m.rowPage, 0, rowPages(m) - 1);
@@ -4089,7 +4101,7 @@ function aiContext() {
          ". Balance " + money(state.balance) + ".");
   if (inMarket()) {
     const m = state.market;
-    L.push("Open market: " + m.title + (m.sport && m.live ? " (live now)" : "") + ". Category " + (m.category || "") + ". " + whenText(m));
+    L.push("Open market: " + m.title + (liveNow(m) ? " (live now)" : "") + ". Category " + (m.category || "") + ". " + whenText(m));
     L.push(m.kind === "duel" ? "This is a two-sided game: picking means picking one side (answer index 0 or 1)."
                              : "Answers can each be picked Yes or No.");
     m.opts.slice(0, 12).forEach((o, i) => {
