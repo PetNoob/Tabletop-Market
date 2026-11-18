@@ -2054,7 +2054,8 @@ function toMarket(e) {
            kind: duel ? "duel" : "list", opts, sel: 0, rowPage: 0,
            court: isGame, hoops: isGame && /basketball/i.test(sub),
            sport: e.category === "Sports", live: !!e.isLive, start: date(e.startTime), closes: date(e.expiryDate),
-           volume: parseFloat(e.volume) || 0, tags: (e.tags || []).join(" ") };
+           volume: parseFloat(e.volume) || 0, tags: (e.tags || []).join(" "),
+           smType: (e.sportsMarket && e.sportsMarket.type) || "" };
 }
 function sampleMarkets() {
   return S.sampleGames.map((g, i) => ({ ticker: "SAMPLE-" + i, title: g.title, category: "Sample", sub: "Pro Basketball",
@@ -2118,11 +2119,13 @@ async function loadCat(cat, more) {
     const url = cat.indexOf("search:") === 0 ? base + "&limit=12&offset=" + offset + "&search=" + encodeURIComponent(cat.slice(7)) :
                 cat === "All" ? base + "&limit=12&offset=" + offset :
                 cat === "Live" ? base + "&limit=30&offset=" + offset :
-                base + "&category=" + encodeURIComponent(cat) + "&limit=12&offset=" + offset;
+                base + "&category=" + encodeURIComponent(cat) + "&limit=12&offset=" + offset +
+                (cat === "Sports" ? "&sports_market_type=moneyline" : "");
     const j = await getJSON(url, 45000);
     let list = (Array.isArray(j) ? j : j.data || []).map(toMarket).filter(Boolean);
     const raw = Array.isArray(j) ? j.length : (j.data || []).length;
     if (cat === "Live") list = list.filter((m) => m.live);              // Gemini has no live filter; live events come first
+    list = list.filter((m) => !m.sport || !m.smType || m.smType === "moneyline" || m.smType === "to_advance");
     const old = new Map(st.markets.map((m) => [m.ticker, m]));
     list.forEach((m) => {                                              // same market as before: keep its history and price times
       m.loadedAt = Date.now();
