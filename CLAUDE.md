@@ -238,6 +238,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Brian found the latest version slow and said he would rather lose interrupting unless it can be as fast. Likely causes: noise heard while thinking counted as a newer question and discarded the answer in progress; end-of-speech had been raised to 800 ms; a longer keyterm list. Changes: `vadTick` ignores the mic while thinking (and while speaking if `SETTINGS.grokInterrupt` is false); end of speech 650 ms; keyterms capped at 40; history sent capped at 8 messages. UNTESTED.
 
+- Nov 17: Brian chose to turn interrupting off: SETTINGS.grokInterrupt = false (Grok finishes speaking before listening; tapping or patting him still stops him).
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
