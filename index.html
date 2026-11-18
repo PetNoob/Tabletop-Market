@@ -1800,7 +1800,7 @@ function openMarketInner(m) {
   state.lockUntil = performance.now() + 1900;           // no presses while the market is still arriving
   UI.arriving = true; setTimeout(() => { UI.arriving = false; }, 1900);
   UI.graph.reveal();
-  growIntoBoard(UI.fromCard, () => { if (inMarket() && state.market === m) courtShow(boardKind(m), teamColors(m), cryptoCoin(m)); });   // a sport's floor and ball, or the crypto vault
+  growIntoBoard(UI.fromCard, () => { if (inMarket() && state.market === m) courtShow(boardKind(m), teamColors(m), cryptoCoin(m) || metalKind(m)); });   // a sport's floor and ball, or the crypto vault
   UI.fromCard = null;
   last.game = Date.now(); pollOptions(viewOptions(), m);
 }
@@ -1880,13 +1880,13 @@ function courtShow(kind, cols, coin) {
     rims.forEach((r) => { if (r.material && r.material.emissive) { r.material.emissive.copy(r.material.color); r.material.emissiveIntensity = glow; } });
   };
   if (!kind) {
-    ballShow(""); vaultShow("");
+    ballShow(""); vaultShow(""); mineShow("");
     tween("court", 380, (k) => { const a = 1 - easeOut(k); FLOOR.u.value = a; if (was === "basketball") setHoops(a, 0);
                                  if (NETS.grp) NETS.grp.scale.set(1, Math.max(0.0001, a), 1); },
           () => { FLOOR.mesh.visible = false; UI.hoops.setAttribute("visible", false); netsShow(""); });
     return;
   }
-  FLOOR.mat.map = floorTex(kind, kind === "crypto" ? null : cols);
+  FLOOR.mat.map = floorTex(kind, kind === "crypto" || kind === "metal" ? null : cols);
   FLOOR.u.value = 0; FLOOR.mesh.visible = true;
   UI.hoops.setAttribute("visible", kind === "basketball");
   netsShow(kind, cols);
@@ -1895,7 +1895,7 @@ function courtShow(kind, cols, coin) {
     FLOOR.u.value = easeOut(span(k, 0.05, 0.65));
     if (kind === "basketball") setHoops(easeBack(span(k, 0.45, 1)), 1.2 * Math.sin(Math.PI * span(k, 0.7, 1)));
     if (NETS.grp) NETS.grp.scale.set(1, Math.max(0.0001, easeBack(span(k, 0.45, 1))), 1);   // the goals rise too
-  }, () => (kind === "crypto" ? vaultShow(coin) : ballShow(kind)));
+  }, () => (kind === "crypto" ? vaultShow(coin) : kind === "metal" ? mineShow(coin) : ballShow(kind)));
 }
 function backToLobby() {
   grabReset();
@@ -3064,7 +3064,7 @@ function floorTex(kind, cols) {
   if (keys.length >= 6) { FLOOR.tex[keys[0]].dispose(); delete FLOOR.tex[keys[0]]; }
   const cv = document.createElement("canvas"); cv.width = FW; cv.height = FH;
   const g = cv.getContext("2d"), rnd = seeded(kind.length * 977 + 13);
-  ({ basketball: paintHardwood, soccer: paintPitch, hockey: paintRink, football: paintGridiron, baseball: paintDiamond, crypto: paintVaultFloor }[kind] || paintHardwood)(g, rnd, cols);
+  ({ basketball: paintHardwood, soccer: paintPitch, hockey: paintRink, football: paintGridiron, baseball: paintDiamond, crypto: paintVaultFloor, metal: paintQuarry }[kind] || paintHardwood)(g, rnd, cols);
   const tx = new THREE.CanvasTexture(cv);
   tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8;
   return (FLOOR.tex[key] = tx);
@@ -3410,7 +3410,7 @@ function cryptoCoin(m) {
   return "coin";
 }
 // the board a market gets: a sport's floor, the crypto vault, or nothing
-const boardKind = (m) => sportKind(m) || (cryptoCoin(m) ? "crypto" : "");
+const boardKind = (m) => sportKind(m) || (cryptoCoin(m) ? "crypto" : metalKind(m) ? "metal" : "");
 
 /* ---------- the crypto floor: brushed dark metal, split in two, YES and NO ---------- */
 function paintVaultFloor(g, rnd) {
@@ -3723,15 +3723,232 @@ function stepNets(dt) {
   }
 }
 
+/* ---------- metal markets: a mountain of blocks you can break into ingots ----------
+   Iron, copper, gold and silver markets get a quarry floor and a stepped mountain of chunky metal blocks
+   (original pixel textures drawn in code). Touch a block and it breaks: pixel shards burst out, the block turns
+   into one or two ingots, and the blocks above it drop down. Ingots are heavy: they tumble, thud, barely bounce,
+   slide a little and settle flat, land on top of the mountain, slosh when the table moves, and can be flicked. */
+const MINE = { el: null, on: false, metal: "", B: 0.011, X0: 0, Z0: 0, NI: 9, NJ: 7, cols: [], blocks: [], inst: null,
+               ingots: [], ingInst: null, shards: [], shardInst: null, mats: {}, last: 0, hands: [], dirty: true };
+const ING_W = 0.015, ING_H = 0.0055, ING_D = 0.0078, ING_CAP = 120, SHARD_CAP = 90;
+const METALS = { iron: ["#d9dbde", "#b9bcc1", "#f2f3f5", "#8d9097"], copper: ["#c8703c", "#a85a2f", "#e6915c", "#4fa38a"],
+                 gold: ["#f2c94c", "#d9a92e", "#fff0a0", "#b8862a"], silver: ["#c8ced8", "#a9b0bc", "#eef1f6", "#7d8594"] };
+function metalKind(m) {
+  if (!m || !/commodit/i.test(m.category || "")) return "";
+  const s = ((m.title || "") + " " + (m.sub || "") + " " + (m.tags || "")).toLowerCase();
+  return /\biron\b/.test(s) ? "iron" : /copper/.test(s) ? "copper" : /\bgold\b/.test(s) ? "gold" : /silver/.test(s) ? "silver" : "";
+}
+// a 16 x 16 pixel picture, shown with sharp pixels
+function pixelTex(draw) {
+  const cv = document.createElement("canvas"); cv.width = cv.height = 16;
+  draw(cv.getContext("2d"));
+  const tx = new THREE.CanvasTexture(cv);
+  tx.magFilter = THREE.NearestFilter; tx.minFilter = THREE.NearestFilter; tx.generateMipmaps = false; tx.colorSpace = THREE.SRGBColorSpace;
+  return tx;
+}
+function mineMats(metal) {
+  if (MINE.mats[metal]) return MINE.mats[metal];
+  const [base, dark, light, accentC] = METALS[metal] || METALS.iron, rnd = seeded(metal.length * 71 + 3);
+  // the block: speckled metal, a darker rim and a lighter top-left edge (original design, not taken from any game)
+  const block = pixelTex((g) => {
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const r = rnd();
+      g.fillStyle = r < 0.12 ? dark : r < 0.2 ? light : base;
+      if (metal === "copper" && r > 0.965) g.fillStyle = accentC;                          // a few green patina flecks
+      g.fillRect(x, y, 1, 1);
+    }
+    g.fillStyle = dark; g.fillRect(0, 15, 16, 1); g.fillRect(15, 0, 1, 16);
+    g.fillStyle = light; g.fillRect(0, 0, 16, 1); g.fillRect(0, 0, 1, 16);
+    g.fillStyle = accentC; g.globalAlpha = 0.35; g.fillRect(4, 4, 8, 8); g.globalAlpha = 1;   // a stamped square in the middle
+    g.fillStyle = light; g.fillRect(5, 5, 6, 1); g.fillRect(5, 5, 1, 6);
+  });
+  // the ingot: smooth metal with a bright stripe
+  const ingot = pixelTex((g) => {
+    g.fillStyle = base; g.fillRect(0, 0, 16, 16);
+    g.fillStyle = light; g.fillRect(0, 3, 16, 3); g.fillRect(0, 0, 16, 1);
+    g.fillStyle = dark; g.fillRect(0, 13, 16, 3); g.fillRect(15, 0, 1, 16);
+    for (let k = 0; k < 10; k++) { g.fillStyle = rnd() < 0.5 ? dark : light; g.fillRect(Math.floor(rnd() * 16), 6 + Math.floor(rnd() * 7), 1, 1); }
+  });
+  const shard = new THREE.MeshStandardMaterial({ color: base, metalness: 0.4, roughness: 0.5 });
+  return (MINE.mats[metal] = {
+    block: new THREE.MeshStandardMaterial({ map: block, metalness: 0.35, roughness: 0.55 }),
+    ingot: new THREE.MeshStandardMaterial({ map: ingot, metalness: 0.6, roughness: 0.35 }), shard });
+}
+// the quarry floor: chunky stone and dirt pixels
+function paintQuarry(g, rnd) {
+  const s = 16;
+  for (let y = 0; y < FH; y += s) for (let x = 0; x < FW; x += s) {
+    const r = rnd(); g.fillStyle = r < 0.45 ? "#5b524a" : r < 0.75 ? "#6a6058" : r < 0.92 ? "#4d4540" : "#7a706a";
+    g.fillRect(x, y, s, s);
+  }
+  g.globalAlpha = 0.25;
+  for (let k = 0; k < 900; k++) { g.fillStyle = rnd() < 0.5 ? "#2f2a26" : "#8f857c"; g.fillRect(Math.floor(rnd() * FW / 4) * 4, Math.floor(rnd() * FH / 4) * 4, 4, 4); }
+  g.globalAlpha = 1; sheen(g, 0.08);
+  g.lineWidth = 3; g.strokeStyle = "rgba(255,255,255,0.25)"; g.strokeRect(18, 18, FW - 36, FH - 36);
+}
+function buildMine() {
+  const M = MINE;
+  M.el = mk("a-entity", { class: "clickable" }, UI.game);
+  M.el.tmEnabled = () => inMarket() && M.on;
+  M.el.addEventListener("click", () => { const tops = M.cols.filter((c) => c.length); if (tops.length) { const c = tops[Math.floor(Math.random() * tops.length)]; breakBlock(c, c.length - 1, null); } });
+  const geo = new THREE.BoxGeometry(M.B, M.B, M.B);
+  M.inst = new THREE.InstancedMesh(geo, mineMats("iron").block, M.NI * M.NJ * 8); M.inst.count = 0; M.inst.frustumCulled = false;
+  M.inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage); M.el.object3D.add(M.inst);
+  // ingot: a box whose top is narrower than its base
+  const ig = new THREE.BoxGeometry(ING_W, ING_H, ING_D), pos = ig.attributes.position;
+  for (let i = 0; i < pos.count; i++) if (pos.getY(i) > 0) { pos.setX(i, pos.getX(i) * 0.74); pos.setZ(i, pos.getZ(i) * 0.7); }
+  ig.computeVertexNormals();
+  M.ingInst = new THREE.InstancedMesh(ig, mineMats("iron").ingot, ING_CAP); M.ingInst.count = 0; M.ingInst.frustumCulled = false;
+  M.ingInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage); M.el.object3D.add(M.ingInst);
+  M.shardInst = new THREE.InstancedMesh(new THREE.BoxGeometry(0.003, 0.003, 0.003), mineMats("iron").shard, SHARD_CAP); M.shardInst.count = 0;
+  M.shardInst.frustumCulled = false; M.shardInst.instanceMatrix.setUsage(THREE.DynamicDrawUsage); M.el.object3D.add(M.shardInst);
+}
+// a stepped mountain: tallest in the middle, lower toward the edges, a little uneven
+function mineShow(metal) {
+  const M = MINE;
+  if (!M.el) buildMine();
+  M.ingots.length = 0; M.shards.length = 0; M.cols = []; M.blocks = [];
+  if (!metal) { M.on = false; M.el.object3D.visible = false; return; }
+  M.metal = metal; M.on = true; M.el.object3D.visible = true;
+  const mats = mineMats(metal);
+  M.inst.material = mats.block; M.ingInst.material = mats.ingot; M.shardInst.material = mats.shard;
+  M.X0 = -M.NI * M.B / 2; M.Z0 = -0.02 - M.NJ * M.B / 2;
+  const rnd = seeded(metal.length * 37 + 11);
+  for (let i = 0; i < M.NI; i++) for (let j = 0; j < M.NJ; j++) {
+    const dx = (i + 0.5) / M.NI - 0.5, dz = (j + 0.5) / M.NJ - 0.5, d = Math.hypot(dx * 1.1, dz * 1.3);
+    const h = Math.max(0, Math.round(6.2 * Math.pow(Math.max(0, 1 - d * 1.75), 1.15) + (rnd() - 0.5) * 1.2));
+    const col = []; col.i = i; col.j = j;
+    for (let k = 0; k < h; k++) col.push({ off: 0.06 + k * 0.012 + rnd() * 0.02, v: 0 });  // they drop in when the mountain appears
+    M.cols.push(col);
+  }
+  M.dirty = true;
+}
+const colAt = (x, z) => {
+  const M = MINE, i = Math.floor((x - M.X0) / M.B), j = Math.floor((z - M.Z0) / M.B);
+  return i >= 0 && i < M.NI && j >= 0 && j < M.NJ ? M.cols[i * M.NJ + j] : null;
+};
+// break the block at height k of a column: shards, one or two ingots, and the blocks above drop
+function breakBlock(col, k, hit) {
+  const M = MINE;
+  if (!col || k < 0 || k >= col.length) return;
+  col.splice(k, 1);
+  for (let n = k; n < col.length; n++) col[n].off += M.B;                                // the ones above fall into place
+  const cx = M.X0 + (col.i + 0.5) * M.B, cz = M.Z0 + (col.j + 0.5) * M.B, cy = FLOOR_Y + (k + 0.5) * M.B;
+  for (let s = 0; s < 8; s++) {
+    if (M.shards.length >= SHARD_CAP) M.shards.shift();
+    M.shards.push({ p: new THREE.Vector3(cx + (Math.random() - 0.5) * M.B, cy + (Math.random() - 0.5) * M.B, cz + (Math.random() - 0.5) * M.B),
+                    v: new THREE.Vector3((Math.random() - 0.5) * 0.9, 0.3 + Math.random() * 0.6, (Math.random() - 0.5) * 0.9), age: 0, life: 0.5 + Math.random() * 0.4 });
+  }
+  const n = Math.random() < 0.45 ? 2 : 1;
+  for (let s = 0; s < n; s++) {
+    let g;
+    if (M.ingots.length < ING_CAP) { g = { p: new THREE.Vector3(), v: new THREE.Vector3(), q: new THREE.Quaternion(), w: new THREE.Vector3(), rest: false }; M.ingots.push(g); }
+    else { g = M.ingots.shift(); M.ingots.push(g); g.rest = false; }
+    g.p.set(cx + (Math.random() - 0.5) * 0.006, cy, cz + (Math.random() - 0.5) * 0.006);
+    g.v.set((Math.random() - 0.5) * 0.35, 0.25 + Math.random() * 0.2, 0.1 + Math.random() * 0.25);
+    if (hit) g.v.addScaledVector(hit, 0.35);
+    g.q.setFromEuler(new THREE.Euler(Math.random() * 6.3, Math.random() * 6.3, Math.random() * 6.3));
+    g.w.set((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16);
+  }
+  M.dirty = true;
+}
+// fingers: touching a block breaks it; ingots can be flicked
+function mineTouch(i, joints) {
+  const M = MINE;
+  if (!M.on || !joints || !inMarket()) return;
+  const mkt = document.getElementById("market").object3D, now = performance.now();
+  const mem = M.hands[i] || (M.hands[i] = { prev: {}, t: now, cool: 0 });
+  const dt = (now - mem.t) / 1000;
+  for (const kj of GRAB_PTS) {
+    const lp = mkt.worldToLocal(mv1.copy(joints[kj])), prev = mem.prev[kj] || (mem.prev[kj] = lp.clone());
+    const hv = dt > 0 && dt < 0.1 ? mv2.copy(lp).sub(prev).divideScalar(dt) : mv2.set(0, 0, 0);
+    const col = colAt(lp.x, lp.z), k = Math.floor((lp.y - FLOOR_Y) / M.B);
+    if (col && k >= 0 && k < col.length && now > mem.cool) { breakBlock(col, k, hv.clone()); mem.cool = now + 110; }
+    for (const g of M.ingots) {
+      const dx = g.p.x - lp.x, dy = g.p.y - lp.y, dz = g.p.z - lp.z, d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > 0.0003) continue;
+      const d = Math.sqrt(d2) || 0.001;
+      g.v.set(hv.x * 0.45 + dx / d * 0.15, Math.max(0.05, hv.y * 0.3 + 0.07), hv.z * 0.45 + dz / d * 0.15);
+      g.w.set((Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12, (Math.random() - 0.5) * 12);
+      g.rest = false;
+    }
+    prev.copy(lp);
+  }
+  mem.t = now;
+}
+const mv1 = new THREE.Vector3(), mv2 = new THREE.Vector3(), mq1 = new THREE.Quaternion(), mq2 = new THREE.Quaternion(), mup = new THREE.Vector3(),
+      mM = new THREE.Matrix4(), mS = new THREE.Vector3(1, 1, 1), mQ0 = new THREE.Quaternion(), mP = new THREE.Vector3();
+function stepMine(now) {
+  const M = MINE, dt0 = Math.min(0.05, Math.max(0.001, (now - (M.last || now)) / 1000));
+  M.last = now;
+  if (!M.on || !inMarket()) return;
+  // blocks dropping into place
+  let n = 0, moving = false;
+  M.cols.forEach((col) => col.forEach((b, k) => {
+    if (b.off > 0) { b.v += 3.5 * dt0; b.off = Math.max(0, b.off - b.v * dt0); moving = true; if (b.off === 0) b.v = 0; }
+    if (M.dirty || moving || b.off > 0) M.inst.setMatrixAt(n, mM.compose(mP.set(M.X0 + (col.i + 0.5) * M.B, FLOOR_Y + (k + 0.5) * M.B + b.off, M.Z0 + (col.j + 0.5) * M.B), mQ0, mS));
+    n++;
+  }));
+  if (M.dirty || moving) { M.inst.count = n; M.inst.instanceMatrix.needsUpdate = true; M.dirty = false; }
+  // heavy ingots
+  const shake = Math.hypot(phys.acc.x, phys.acc.z);
+  const steps = Math.ceil(dt0 / 0.01), dt = dt0 / steps;
+  M.ingots.forEach((g, gi) => {
+    if (g.rest && shake > 2.2) { g.rest = false; g.v.y += 0.03; }
+    if (g.rest) return;
+    for (let s = 0; s < steps; s++) {
+      g.v.y += BALL_G * 1.8 * dt;
+      g.v.x -= phys.acc.x * dt * 0.3; g.v.z -= phys.acc.z * dt * 0.3;
+      g.p.addScaledVector(g.v, dt);
+      const col = colAt(g.p.x, g.p.z), ground = FLOOR_Y + (col ? col.length * M.B : 0) + ING_H / 2 + (gi % 5) * 0.0001;
+      if (g.p.y < ground) {
+        if (ground - g.p.y > M.B * 0.6 && col) {                                           // ran into the side of the mountain
+          const cx = M.X0 + (col.i + 0.5) * M.B, cz = M.Z0 + (col.j + 0.5) * M.B;
+          if (Math.abs(g.p.x - cx) > Math.abs(g.p.z - cz)) { g.p.x = cx + Math.sign(g.p.x - cx) * (M.B / 2 + 0.004); g.v.x = -g.v.x * 0.2; }
+          else { g.p.z = cz + Math.sign(g.p.z - cz) * (M.B / 2 + 0.004); g.v.z = -g.v.z * 0.2; }
+        } else {
+          g.p.y = ground;
+          if (g.v.y < 0) g.v.y = -g.v.y * 0.15;
+          if (g.v.y < 0.06) g.v.y = 0;
+          const f = Math.max(0, 1 - dt * 6); g.v.x *= f; g.v.z *= f; g.w.multiplyScalar(Math.max(0, 1 - dt * 9));
+        }
+      }
+      if (Math.abs(g.p.x) > COURT_XB - 0.008) { g.p.x = Math.sign(g.p.x) * (COURT_XB - 0.008); g.v.x = -g.v.x * 0.3; }
+      if (Math.abs(g.p.z) > COURT_ZB - 0.006) { g.p.z = Math.sign(g.p.z) * (COURT_ZB - 0.006); g.v.z = -g.v.z * 0.3; }
+    }
+    const wl = g.w.length();
+    if (wl > 0.001) { mq1.setFromAxisAngle(mv1.copy(g.w).divideScalar(wl), wl * dt0); g.q.premultiply(mq1); }
+    const col = colAt(g.p.x, g.p.z), ground = FLOOR_Y + (col ? col.length * M.B : 0) + ING_H / 2;
+    if (g.p.y <= ground + 0.002) {                                                        // settle flat, wide side down
+      mup.set(0, 1, 0).applyQuaternion(g.q);
+      mq2.setFromUnitVectors(mup, mv1.set(0, 1, 0)).multiply(g.q);
+      g.q.slerp(mq2, Math.min(1, dt0 * 8));
+      if (g.v.lengthSq() < 0.0006 && wl < 0.4 && mup.y > 0.995) { g.rest = true; g.v.set(0, 0, 0); g.w.set(0, 0, 0); }
+    }
+  });
+  M.ingots.forEach((g, i) => M.ingInst.setMatrixAt(i, mM.compose(g.p, g.q, mS)));
+  M.ingInst.count = M.ingots.length; M.ingInst.instanceMatrix.needsUpdate = true;
+  // shards fly, bounce once or twice and shrink away
+  for (let i = M.shards.length - 1; i >= 0; i--) {
+    const s = M.shards[i];
+    s.age += dt0;
+    if (s.age > s.life) { M.shards.splice(i, 1); continue; }
+    s.v.y += BALL_G * dt0; s.p.addScaledVector(s.v, dt0);
+    if (s.p.y < FLOOR_Y + 0.0015) { s.p.y = FLOOR_Y + 0.0015; s.v.y = -s.v.y * 0.35; s.v.x *= 0.7; s.v.z *= 0.7; }
+  }
+  M.shards.forEach((s, i) => M.shardInst.setMatrixAt(i, mM.compose(s.p, mQ0, mv1.setScalar(Math.max(0.01, 1 - s.age / s.life)))));
+  M.shardInst.count = M.shards.length; M.shardInst.instanceMatrix.needsUpdate = true;
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); vaultTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
+  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); vaultTouch(i, j); mineTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => {
     [["follow", stepFollow], ["physics", stepPhysics], ["grab", stepGrab], ["anims", stepAnims], ["piles", (n) => PILES.forEach((p) => p.update(n))],
-     ["pulse", stepPulse], ["grok", stepOrb], ["hands", stepHands], ["ball", stepBall], ["vault", stepVault]].forEach(([tag, f]) => { try { f(now); } catch (e) { reportErr(tag, e); } });
+     ["pulse", stepPulse], ["grok", stepOrb], ["hands", stepHands], ["ball", stepBall], ["vault", stepVault], ["mine", stepMine]].forEach(([tag, f]) => { try { f(now); } catch (e) { reportErr(tag, e); } });
   },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
