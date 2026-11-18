@@ -3352,8 +3352,37 @@ function aiGreet() {
   if (AI.greet[i]) { aiMode("speaking"); playBuffer(AI.greet[i], () => aiMode("awake")); }
   else aiSpeak(GREETINGS[i], "awake");
 }
+// plain commands we can understand ourselves: go back, open a tab or a market, activity, search, simulate.
+// Returns { action, say } or null (then Grok answers). Picks and cash-outs always go through Grok and the yes/no check.
+function aiLocal(q) {
+  const s = String(q || "").toLowerCase().replace(/[.,!?]+/g, " ").replace(/\s+/g, " ").trim()
+    .replace(/^(hey |ok |okay |um |uh |so |grok |please |can you |could you |would you |i want to |let's |lets )+/, "").replace(/ please$/, "").trim();
+  if (!s) return null;
+  if (/^(go |take me |head |get )?(back|home)( to (the )?(lobby|list|markets?|menu|home|main( menu| screen)?|start))?$/.test(s) ||
+      /^(back to|return to|go to) (the )?(lobby|list|all markets|main menu|home)$/.test(s) || /^(close|exit|leave) (this|the) (market|game)$/.test(s))
+    return { action: { type: "back" }, say: "Okay!" };
+  let m = s.match(/^(show( me)?|open|pull up|go to|bring up|check)? ?(my )?(positions|orders|history|receipts|activity)( tab)?$/);
+  if (m) { const tab = m[4] === "receipts" ? "history" : m[4] === "activity" ? "positions" : m[4]; return { action: { type: "activity", tab }, say: "Here's your " + tab + "." }; }
+  m = s.match(/^(search|look up|look for|find)( for)? (.+)$/);
+  if (m) return { action: { type: "search", words: m[3] }, say: "Searching for " + m[3] + "." };
+  if (/^(simulate|simulation|run a simulation|simulate (the )?odds)$/.test(s)) return { action: { type: "simulate" }, say: "Simulating the odds. This part is not real." };
+  m = s.match(/^(open|show( me)?|pull up|go to|bring up|switch to|take me to|let me see) (.+)$/);
+  const what = m ? m[m.length - 1] : s;
+  const cat = aiFindCat(what);
+  if (cat && (m || what.split(" ").length <= 2)) return { action: { type: "category", name: cat }, say: "Here's " + cat + "." };
+  const left = what.split(" ").filter((w) => w.length > 1 && !["the", "game", "market", "markets", "match", "odds", "price", "it", "this", "that", "one", "more", "details"].includes(w));
+  if (m && left.length) return { action: { type: "open", name: what }, say: "Opening it." };
+  return null;
+}
 async function aiAnswer(q) {
   const id = AI.req = (AI.req || 0) + 1;                                // a newer question replaces an older one
+  const loc = aiLocal(q);
+  if (loc) {
+    if (S.grokDebug) aiNote("Command: " + loc.action.type + (loc.action.name || loc.action.tab || loc.action.words ? " " + (loc.action.name || loc.action.tab || loc.action.words) : ""));
+    const own = aiDo(loc.action), said = own || loc.say;
+    AI.history = (AI.history || []).concat([{ role: "user", content: q }, { role: "assistant", content: JSON.stringify({ say: said, action: loc.action }) }]).slice(-12);
+    return aiSpeak(said, "awake", id);
+  }
   aiMode("thinking");
   try {
     if (S.grokDebug) aiNote("Asking Grok: " + q);
@@ -3363,7 +3392,7 @@ async function aiAnswer(q) {
     if (S.grokDebug) aiNote("Grok: " + (a.say || "(no words)") + (a.action ? "  [" + a.action.type + "]" : ""));
     const own = aiDo(a.action);
     const said = own || a.say || "Hmm, I'm not sure about that one.";
-    AI.history = (AI.history || []).concat([{ role: "user", content: q }, { role: "assistant", content: said }]).slice(-12);
+    AI.history = (AI.history || []).concat([{ role: "user", content: q }, { role: "assistant", content: JSON.stringify({ say: said, action: a.action || null }) }]).slice(-12);
     await aiSpeak(said, "awake", id);
   } catch (e) { if (id !== AI.req) return; console.warn("answer:", e.message); aiNote(e.message); aiMode("awake"); }
 }
@@ -3418,11 +3447,19 @@ function aiFindCat(name) {
   if (!want) return null;
   const cats = barCats();
   return cats.find((c) => clean2(c) === want) || cats.find((c) => stem(clean2(c)) === stem(want)) ||
-         cats.find((c) => clean2(c).includes(want) || want.includes(clean2(c))) || null;
+         cats.find((c) => { const a = " " + clean2(c) + " ", b = " " + want + " "; return a.includes(b) || b.includes(a); }) || null;   // whole words only ("basketball" is not "All")
 }
 // carry out what the user asked for. Returns words to speak instead of Grok's own, or nothing.
 function aiDo(a) {
+  if (typeof a === "string") a = { type: a };
   if (!a || !a.type) return "";
+  const ty = String(a.type).toLowerCase().replace(/[^a-z]/g, "");
+  const alias = { goback: "back", backtolobby: "back", gobacktolobby: "back", lobby: "back", home: "back", returntolobby: "back", close: "back",
+                  openmarket: "open", showmarket: "open", market: "open", opencategory: "category", switchcategory: "category", tab: "category",
+                  switchtab: "category", showactivity: "activity", openactivity: "activity", positions: "activity", orders: "activity",
+                  history: "activity", searchmarkets: "search", find: "search", placeorder: "order", pick: "order", cashout: "cashout", sell: "cashout" };
+  a = Object.assign({}, a, { type: alias[ty] || ty });
+  if (a.type === "activity" && !a.tab && ["positions", "orders", "history"].includes(ty)) a.tab = ty;
   // "open crypto" means the Crypto tab, not a market called crypto
   if (a.type === "open" && a.name && !Number.isInteger(a.index) && aiFindCat(a.name)) a = { type: "category", name: a.name };
   if (a.type === "back") { if (inMarket()) backToLobby(); else if (state.activity) { state.activity = ""; refresh(); } return ""; }
@@ -3452,7 +3489,8 @@ function aiOpen(a) {
   };
   const go2 = (m) => { state.activity = ""; UI.fromCard = CARDS.find((c) => c.m === m) || null; openMarket(m); };
   if (Number.isInteger(a.index) && !a.name) return go(visibleMarkets()[a.index]);
-  const words = String(a.name || "").toLowerCase().split(/\W+/).filter((x) => x.length > 1);
+  const FILLER = ["the", "game", "market", "markets", "match", "matchup", "please", "up", "me", "one", "that", "this", "a", "an", "for", "of", "on", "odds", "price", "vs", "versus", "against"];
+  const words = String(a.name || "").toLowerCase().split(/\W+/).filter((x) => x.length > 1 && !FILLER.includes(x));
   if (!words.length) return;
   const all = [].concat.apply([], Object.values(state.store).map((s) => s.markets || []));
   const hit = all.find((m) => words.every((w) => m.title.toLowerCase().includes(w))) ||
