@@ -85,6 +85,47 @@ export default {
         return new Response(r.body, { status: 200, headers: h });
       }
 
+      // ---------- MoonPay test-mode card deposits (the keys live only here, in Cloudflare) ----------
+      // /moonpay-url?amount=25&wallet=0x...  -> a signed link to MoonPay's checkout (sandbox), and an id for this purchase
+      // /moonpay-check?ext=<id>             -> what MoonPay says happened to that purchase (status and amount)
+      if (path === "/moonpay-url" || path === "/moonpay-check") {
+        if (!env.MOONPAY_PUBLISHABLE_KEY || !env.MOONPAY_SECRET_KEY) return reply({ error: "MoonPay keys are not set up" }, 503);
+        const ip = request.headers.get("CF-Connecting-IP") || "?";
+        if (!rateOk("mp:" + ip, 120)) return reply({ error: "Too many requests, try again in a bit" }, 429);
+        const q = new URL(request.url).searchParams;
+        if (path === "/moonpay-url") {
+          const amount = Math.round(Math.min(500, Math.max(20, parseFloat(q.get("amount")) || 25)) * 100) / 100;
+          const wallet = q.get("wallet") || "";
+          const ext = "tm-" + crypto.randomUUID();
+          const p = new URLSearchParams();
+          p.set("apiKey", env.MOONPAY_PUBLISHABLE_KEY);
+          p.set("currencyCode", env.MOONPAY_CURRENCY || "eth");
+          p.set("baseCurrencyCode", "usd");
+          p.set("baseCurrencyAmount", String(amount));
+          p.set("lockAmount", "true");
+          p.set("externalTransactionId", ext);
+          p.set("theme", "dark");
+          p.set("colorCode", "#ff8c32");
+          p.set("redirectURL", (ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]) + "/Tabletop-Market/?mp=1");
+          if (/^0x[0-9a-fA-F]{40}$/.test(wallet)) p.set("walletAddress", wallet);
+          const query = "?" + p.toString();
+          // MoonPay checks this signature: HMAC-SHA256 of the query string with the secret key, in base64
+          const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.MOONPAY_SECRET_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+          const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(query)));
+          let bin = ""; sig.forEach((b) => { bin += String.fromCharCode(b); });
+          const host = env.MOONPAY_HOST || "https://buy-sandbox.moonpay.com";
+          return reply({ url: host + "/" + query + "&signature=" + encodeURIComponent(btoa(bin)), ext, amount, sandbox: /sandbox/.test(host) });
+        }
+        const ext = q.get("ext") || "";
+        if (!/^tm-[0-9a-f-]{36}$/.test(ext)) return reply({ error: "Bad purchase id" }, 400);
+        const r = await fetch("https://api.moonpay.com/v1/transactions/ext/" + ext, { headers: { "Authorization": "Api-Key " + env.MOONPAY_SECRET_KEY } });
+        const j = await r.json().catch(() => null);
+        if (!r.ok) return reply({ error: "MoonPay: " + ((j && (j.message || j.type)) || r.status) }, 502);
+        const tx = Array.isArray(j) ? j[j.length - 1] : j;
+        if (!tx) return reply({ status: "not_found" });
+        return reply({ status: tx.status || "unknown", amount: tx.baseCurrencyAmount, currency: tx.currency && tx.currency.code, id: tx.id });
+      }
+
       // ---------- sound effects, made by ElevenLabs' sound generator ----------
       // Each sound is generated ONCE from a short description, then kept in Cloudflare's cache for a year,
       // so playing it again costs nothing. Only the names below can be asked for.
@@ -201,7 +242,8 @@ export default {
 
       if (path === "/" || path === "/status") {
         return reply({ ok: true, tradingConfigured: configured, unlocked, maxOrderUsd: maxUsd, sandbox: env.GEMINI_SANDBOX === "1",
-                       voice: !!env.ELEVENLABS_API_KEY, grok: !!env.XAI_API_KEY, sfx: !!env.ELEVENLABS_API_KEY });
+                       voice: !!env.ELEVENLABS_API_KEY, grok: !!env.XAI_API_KEY, sfx: !!env.ELEVENLABS_API_KEY,
+                       moonpay: !!(env.MOONPAY_PUBLISHABLE_KEY && env.MOONPAY_SECRET_KEY) });
       }
 
       // everything below spends or reveals the owner's account, so it needs the passcode

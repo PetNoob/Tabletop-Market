@@ -2941,7 +2941,7 @@ function openAdd(mode) {
 }
 function closeAdd() {
   if (!ADD.open) return;
-  ADD.open = false; ADD.busy = false;
+  ADD.open = false; ADD.busy = false; ADD.mpMsg = "";
   UI.addPanel.setAttribute("visible", false);
   lockFingers(); refresh();
 }
@@ -2964,6 +2964,7 @@ function addContinue() {
 }
 function addPay() {
   if (ADD.busy || ADD.step !== "card") return;
+  if (ADD.mode === "add" && MP.ok) return moonpayStart();     // a real MoonPay checkout in test mode
   if (LIVE.on) { closeAdd(); return; }              // real money: nothing is moved here (it is done in the Gemini app)
   ADD.busy = true; refreshAdd(); refresh();
   setTimeout(() => {
@@ -2992,6 +2993,16 @@ function refreshAdd() {
                                    out ? "Available " + money(state.balance) : LIVE.on ? "Into your Gemini account" : "Ready to use in seconds");
   UI.addNote.setAttribute("color", short ? C.red : C.acc);
   UI.addAll.t.setAttribute("value", out ? "All" : "Clear");
+  if (!out && MP.ok) {                               // MoonPay's own checkout (sandbox), in test and live mode
+    const a2 = money(Math.max(MP.min, ADD.amount));
+    UI.addTitleB.setAttribute("value", LIVE.on ? "Card deposit (MoonPay test)" : "Pay with card");
+    ["MoonPay checkout", "TEST MODE", "Card goes in on MoonPay", "Opens outside AR, then back"].forEach((s, i) => UI.addCard[i].setAttribute("value", s));
+    UI.addTotal.setAttribute("value", "Add " + a2);
+    UI.addSub.setAttribute("value", ADD.mpMsg || (ADD.amount < MP.min ? "MoonPay minimum is " + money(MP.min) : LIVE.on ? "Test only: not added to Gemini" : "No real charge: test card"));
+    UI.addPay.t.setAttribute("value", ADD.busy ? "Opening..." : "Pay with MoonPay");
+    UI.addFoot.setAttribute("value", "MoonPay sandbox: no real money moves");
+    return;
+  }
   if (LIVE.on) {                                     // real money: say plainly where it moves
     UI.addTitleB.setAttribute("value", out ? "Withdraw on Gemini" : "Deposit on Gemini");
     ["Gemini account", "REAL MONEY", "Done in the Gemini app", "gemini.com"].forEach((s, i) => UI.addCard[i].setAttribute("value", s));
@@ -4161,6 +4172,65 @@ function sfx(name, vol, rate) {
   g.gain.value = vol == null ? 0.6 : vol;
   src.connect(g); g.connect(ctx.destination); src.start();
 }
+
+/* ---------- MoonPay (test mode): Add money with a real card checkout ----------
+   When the server has MoonPay test keys, "+ Add" offers "Pay with MoonPay": the app remembers the purchase, leaves AR
+   and opens MoonPay's real checkout in sandbox mode (test card only, no real charge). MoonPay sends you back here;
+   the server asks MoonPay what happened, and only a real (test) purchase adds dollars to the test balance.
+   In live mode it opens the same test checkout to show it works, but NEVER adds anything to the real Gemini balance. */
+const MP = { ok: false, min: 20 };
+if (S.serverUrl) fetch(S.serverUrl.replace(/\/+$/, "") + "/status").then((r) => r.json()).then((s) => { MP.ok = !!s.moonpay; try { refreshAdd(); } catch (e) {} }).catch(() => {});
+function mpBanner(text, good) {
+  let b = document.getElementById("mpBanner");
+  if (!b) {
+    b = document.createElement("div"); b.id = "mpBanner";
+    b.style.cssText = "margin:0 0 18px;padding:10px 14px;border-radius:10px;font-size:14px;line-height:1.4;border:1px solid #3a3f47;background:#15171a";
+    const card = document.querySelector("#welcome .card"); if (card) card.insertBefore(b, card.firstChild);
+  }
+  b.style.color = good ? "#ffc552" : "#c9cfd6"; b.textContent = text;
+}
+async function moonpayStart() {
+  const amount = Math.max(MP.min, ADD.amount);
+  ADD.busy = true; ADD.mpMsg = "Opening MoonPay..."; refreshAdd(); refresh();
+  try {
+    const wallet = ARC.wallet && ARC.wallet.address ? ARC.wallet.address : "";
+    const r = await fetch(S.serverUrl.replace(/\/+$/, "") + "/moonpay-url?amount=" + amount + (wallet ? "&wallet=" + wallet : ""));
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || "server said " + r.status);
+    store.set("tm-mp", JSON.stringify({ ext: j.ext, amount: j.amount, live: LIVE.on, t: Date.now() }));
+    saveTestState();
+    try { if (scene.is("ar-mode") || scene.is("vr-mode")) scene.exitVR(); } catch (e) {}
+    setTimeout(() => { location.href = j.url; }, 350);                                    // leave AR, then MoonPay's checkout
+  } catch (e) {
+    ADD.busy = false; ADD.mpMsg = "MoonPay: " + trunc(String(e.message || e), 40); refreshAdd(); refresh();
+  }
+}
+// back from MoonPay: ask the server what MoonPay says, then add the dollars (test mode only)
+async function moonpayReturn() {
+  let p = null; try { p = JSON.parse(store.get("tm-mp") || "null"); } catch (e) {}
+  try { history.replaceState(null, "", location.pathname); } catch (e) {}
+  if (!p || !p.ext) return;
+  mpBanner("Checking your MoonPay test purchase...");
+  for (let i = 0; i < 12; i++) {
+    let s = null;
+    try { s = await (await fetch(S.serverUrl.replace(/\/+$/, "") + "/moonpay-check?ext=" + p.ext)).json(); } catch (e) {}
+    const st = s && s.status;
+    if (st === "completed" || st === "pending" || st === "waitingAuthorization") {
+      store.set("tm-mp", "");
+      if (p.live) return mpBanner("MoonPay test checkout completed (test mode). Not added to your real Gemini balance.", true);
+      while (!UI.balance) await new Promise((r) => setTimeout(r, 300));
+      state.balance = Math.round((state.balance + p.amount) * 100) / 100;
+      logActivity({ side: "Added", title: "Added with MoonPay (test card)", what: "MoonPay sandbox", amount: p.amount });
+      saveTestState(); refresh();
+      return mpBanner("MoonPay test deposit: " + money(p.amount) + " added. Press Enter to go back to the table.", true);
+    }
+    if (st === "failed") { store.set("tm-mp", ""); return mpBanner("The MoonPay test purchase failed. Nothing was added."); }
+    if (st === "not_found" && i >= 2) { store.set("tm-mp", ""); return mpBanner("No MoonPay purchase was made. Nothing was added."); }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  mpBanner("MoonPay has not confirmed the test purchase yet. Nothing was added.");
+}
+if (/[?&]mp=1/.test(location.search)) window.addEventListener("load", () => setTimeout(moonpayReturn, 800));
 
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
