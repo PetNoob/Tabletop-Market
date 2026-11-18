@@ -2624,13 +2624,19 @@ function vadTick() {
   AI.micLvl = lvl;
   // while he talks, his own voice can reach the microphone, so you have to be clearly louder than that to cut in
   const echo = talking && AI.outAn ? analyserLevel(AI.outAn) : 0;
-  const loud = lvl > AI.floor * 2 + 0.006 + (talking ? 0.035 + echo * 0.9 : 0);
+  // learn how much of his own voice reaches the microphone (it differs by headset and room) while you are quiet
+  if (talking && echo > 0.01 && AI.speechMs === 0) {
+    const ratio = lvl / echo, k = AI.echoK || 0.3;
+    if (ratio < k * 3) AI.echoK = clamp(k * 0.93 + ratio * 0.07, 0.02, 2);
+  }
+  // to count as you cutting in, the microphone must be clearly louder than his own voice would make it
+  const loud = lvl > AI.floor * 2 + 0.006 + (talking ? 0.012 + echo * (AI.echoK || 0.3) * 2.2 : 0);
   if (!loud && !talking) AI.floor = AI.floor * 0.97 + lvl * 0.03;      // learns how quiet the room is
-  if (loud) { AI.speechMs += 50; AI.quietMs = 0; if (AI.speechMs > (talking ? 420 : 220)) AI.speech = true; }
+  if (loud) { AI.speechMs += 50; AI.quietMs = 0; if (AI.speechMs > (talking ? 350 : 220)) AI.speech = true; }
   else { AI.quietMs += 50; if (!AI.speech) AI.speechMs = Math.max(0, AI.speechMs - 25); }
   if (talking) {
     if (AI.speech) { aiHush(); aiMode("awake"); }                       // you cut in: he stops and listens
-    else { if (age > 1500) recCut(false); return; }
+    else { if (age > 1500 && AI.speechMs === 0) recCut(false); return; }   // only start a fresh clip when nobody is mid-word
   }
   if (AI.speech && (AI.quietMs > 800 || age > 12000)) {                // a sentence just ended (or a long one): check it
     AI.t0 = now;                                                          // for the timing note
