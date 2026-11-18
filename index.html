@@ -712,7 +712,9 @@ function reportErr(tag, e) {
   const msg = String((e && e.message) || e), now = performance.now();
   if (ERRS[msg] && now - ERRS[msg] < 4000) return;
   ERRS[msg] = now;
-  const m = /index\.html[^:]*:(\d+)/.exec(String(e && e.stack || "")) || /:(\d+):\d+\)?\s*$/m.exec(String(e && e.stack || ""));
+  // the first line of the error's trail that points into this page gives the line number
+  const here = String(e && e.stack || "").split("\n").find((s) => s.indexOf(location.pathname) >= 0 && s.indexOf(".js") < 0) || "";
+  const m = /:(\d+):\d+\)?\s*$/.exec(here);
   console.error("[" + tag + "]", e);
   try { aiNote("Error " + (m ? "L" + m[1] + " " : "") + tag + ": " + msg); } catch (x) {}
 }
@@ -1475,8 +1477,8 @@ function scoresTick() {
   const want = {};
   visibleMarkets().concat(inMarket() ? [state.market] : []).forEach((m) => { const L = leagueOf(m); if (L) want[L[1]] = L; });
   Object.keys(want).forEach((k) => {
-    const now = Date.now(), b = SCORES.boards[k], liveNow = b && b.some((g) => g.state === "in");
-    if (SCORES.busy[k] || now - (SCORES.at[k] || 0) < (liveNow ? 30000 : 120000)) return;
+    const now = Date.now(), b = SCORES.boards[k], anyIn = b && b.some((g) => g.state === "in");
+    if (SCORES.busy[k] || now - (SCORES.at[k] || 0) < (anyIn ? 30000 : 120000)) return;
     SCORES.busy[k] = true; SCORES.at[k] = now;
     getJSON(ESPN + k + "/scoreboard" + want[k][2], 15000)
       .then((j) => { SCORES.boards[k] = (j.events || []).map(espnGame).filter(Boolean); refresh(); })
@@ -2440,11 +2442,11 @@ function refreshMarket() {
   UI.title.object3D.position.x = setIcon(UI.titleIcon, m.image) ? -0.238 : -0.278;
   UI.title.setAttribute("value", trunc(m.title, 46));
   // the live line: period and clock when ESPN has the game, otherwise when it starts or closes
-  const sc = duel ? scoreFor(m) : null, liveNow = sc ? sc.state === "in" : !!(liveNow(m));
-  const whenT = sc && sc.state !== "pre" ? (sc.state === "in" ? "LIVE  -  " + sc.detail : sc.detail) : liveNow ? "LIVE" : whenText(m);
+  const sc = duel ? scoreFor(m) : null, isLive = sc ? sc.state === "in" : liveNow(m);
+  const whenT = sc && sc.state !== "pre" ? (sc.state === "in" ? "LIVE  -  " + sc.detail : sc.detail) : isLive ? "LIVE" : whenText(m);
   UI.when.setAttribute("value", whenT);
-  UI.when.setAttribute("color", liveNow ? C.red : C.dim);
-  UI.whenLive = liveNow;
+  UI.when.setAttribute("color", isLive ? C.red : C.dim);
+  UI.whenLive = isLive;
   const half = textWidth(whenT, 0.0072) / 2 + 0.02, len = Math.max(0.01, 0.355 - half);
   UI.rules.forEach((r, i) => { r.object3D.scale.x = len / 0.1; r.object3D.position.x = (i ? 1 : -1) * (half + len / 2); });
   // scoreboard: games only. The score is shown only when ESPN has it (never made up)
