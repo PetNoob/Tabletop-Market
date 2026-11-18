@@ -332,7 +332,7 @@ const C = { base: "#15171a", court: "#202328", panel: "#1b1e22", key: "#2b2f36",
             text: "#f2f4f7", dim: "#b0b8c3", green: "#2fbf71", greenInk: "#06210f", red: "#e5484d", handle: "#5d646e", walletOn: "#1f5a3c" };
 const state = {
   balance: S.startBalance, sel: null, amount: 5, typed: "",
-  view: "lobby", page: 0, lockUntil: 0,
+  view: "lobby", scroll: 0, lockUntil: 0, feat: {}, sort: "default", searchQ: "", barStart: 0,
   cats: [], cat: "", store: {},   // store[category] = { markets, total, loadedAt, loading, source }
   market: null, sim: false,
   picks: {}                       // picks["ticker|answer number|yes or no"] = { stake, shares }
@@ -473,7 +473,7 @@ function brushAt(hand, tip, now) {
     const lp = market.object3D.worldToLocal(pv2.copy(tip));
     const onBase = state.stage > 0.5 && Math.abs(lp.x) < 0.35 && lp.z > -0.21 && lp.z < 0.29 && lp.y > -0.02 && lp.y < 0.02;
     const bp = UI.lobby.object3D.worldToLocal(pv2.copy(tip));
-    const onBoard = Math.abs(bp.x) < 0.33 && Math.abs(bp.y) < 0.21 && Math.abs(bp.z) < 0.02;
+    const onBoard = Math.abs(bp.x) < LW / 2 && bp.y < LH / 2 && bp.y > -LH / 2 - (state.stage > 0.5 ? 0 : 0.06) && Math.abs(bp.z) < 0.02;
     if (onBase || onBoard) {
       pv.copy(tip).sub(prev.p).divideScalar(dt);                 // fingertip speed
       const sp = pv.length();
@@ -1069,67 +1069,387 @@ function setIcon(mesh, url) {
   return true;
 }
 
+/* ---------- the lobby: one wide panel ----------
+   Fixed header (name, voice search, Activity, Sort, status), then a scrolling area: a big featured market on top
+   and a grid of market cards three across. It scrolls one row at a time (rail on the right: drag a finger along it,
+   or press its arrows; mouse wheel on a computer). Categories live in their own bar just under the panel. */
+const LW = 0.74, LH = 0.48;                                   // panel size
+const CTOP = 0.19, CBOT = -0.228, CX0 = -0.355, CW = 0.68;    // the scrolling area
+const GAP = 0.008, COLS = 3, CARD_W = (CW - 2 * 0.01) / 3, CARD_H = 0.098;
+const FEAT_H = CTOP - CBOT - 2 * CARD_H - 2 * GAP;            // featured card + two rows of cards fill the area exactly
+const CXM = CX0 + CW / 2;
+const CY = "#3fe0d0", YE = "#ffcf3a";                          // cyan and yellow: the featured card's two answers
+const PANEL_BG = "#101215", CARD_BG = "#1a1d22", EDGE = "#2c3038", FIELD = "#1d2025";
+const LOBBY_SORTS = [["default", "Top"], ["volume", "Volume"], ["soon", "Soonest"]];
+const CAT_ORDER = ["Sports", "Crypto", "Commodities", "Economics", "Politics", "Tech", "Business", "Weather", "Culture"];
+
+// a slightly larger slab just behind a surface, so only its rim shows: a thin border
+function rim(el, w, h, r) { slab(el, w + 0.003, h + 0.003, 0.006, EDGE, { r: r + 0.0015, opacity: 1, pos: "0 0 -0.0015" }); }
+function textWidth(s, size) { return String(s).split("").reduce((t, c) => t + tkAdvance(c, size), 0); }
+// tickers are right-aligned; this puts one in the middle of a pill
+function centerTicker(el, cx, text) { el.object3D.position.x = cx + textWidth(text, el.tk.size * GLYPH) / 2; }
+// give a button a new width (rebuilds its rounded shape)
+function setButtonWidth(b, w) {
+  if (Math.abs(b.w - w) < 0.0005) return;
+  const mesh = b.el.getObject3D("mesh");
+  mesh.geometry.dispose(); mesh.geometry = roundedGeo(w, b.h, b.d, b.h / 2); b.w = w;
+}
+
 function buildLobby(market) {
   const L = UI.lobby = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
-  slab(L, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE });
-  UI.lTitle = label(L, "Markets", -0.308, 0.185, 0.006, 0.0115, C.text, "left");
-  // Activity: your positions, orders and history. Works after a reload, because positions come from Gemini (live) or are saved (test).
-  UI.actBtn = button(L, "Activity", -0.175, 0.185, 0.085, 0.026, () => toggleActivity(),
-                     { size: 0.0058, r: 0.013, color: C.panel, enabled: inLobby });
-  UI.actTabs = [["positions", "Positions"], ["orders", "Orders"], ["history", "History"]].map(([id, name], i) => {
-    const b = button(L, name, -0.2765 + i * 0.079, 0.15, 0.075, 0.026, () => { state.activity = id; state.page = 0; actLoad(); refresh(); },
-                     { size: 0.006, r: 0.013, color: C.panel, enabled: () => inLobby() && !!state.activity });
-    b.id = id;
-    return b;
-  });
-  UI.lStatus = label(L, "", 0.308, 0.185, 0.006, 0.0068, C.dim, "right");
-  // 16 tabs in two rows; they are named once Gemini sends its list of categories
-  for (let i = 0; i < 16; i++) {
-    const tab = { name: "" };
-    tab.b = button(L, "", -0.2765 + (i % 8) * 0.079, 0.15 - Math.floor(i / 8) * 0.031, 0.075, 0.026,
-                   () => selectCat(tab.name), { size: 0.006, r: 0.013, color: C.panel, enabled: () => inLobby() && !!tab.name && !state.activity });
-    TABS.push(tab);
-  }
-  for (let i = 0; i < 6; i++) {
-    const x = -0.158 + (i % 2) * 0.316, y = 0.052 - Math.floor(i / 2) * 0.088;
-    const card = { m: null };
-    const b = card.b = button(L, "", x, y, 0.30, 0.082, () => { UI.fromCard = card; return card.act ? openActivity(card.act) : openMarket(card.m); },
-                              { r: 0.014, enabled: () => inLobby() && (!!card.m || !!(card.act && card.act.ticker)) });
-    card.icon = iconMesh(b.el, 0.024, -0.126, 0.02, b.tz);
-    card.title = label(b.el, "", -0.138, 0.032, b.tz, 0.007, C.text, "left", 0.13, "top");
-    card.foot  = label(b.el, "", -0.138, -0.029, b.tz, 0.0062, C.dim, "left");
-    card.rows = [0.015, -0.015].map((ry) => ({
-      chip: slab(b.el, 0.005, 0.022, 0.002, C.line, { r: 0.0025, order: 2, pos: `0.142 ${ry} ${b.tz}` }),
-      name: label(b.el, "", 0.092, ry, b.tz, 0.0064, "#d4dae1", "right"),
-      pct:  tickerLabel(b.el, 0.136, ry, b.tz, 0.0098, C.text, "right")
-    }));
+  slab(L, LW, LH, 0.008, PANEL_BG, { r: 0.028, opacity: 0.97 });
+  // header (stays put while the content scrolls)
+  UI.lTitle = label(L, "Tabletop Market", -0.355, 0.212, 0.006, 0.0102, C.text, "left");
+  UI.search = button(L, "", -0.105, 0.212, 0.17, 0.028, () => searchPress(),
+                     { r: 0.014, color: FIELD, enabled: () => inLobby() && !state.activity });
+  UI.searchText = label(UI.search.el, "", -0.075, 0, UI.search.tz, 0.0058, C.dim, "left");
+  UI.searchX = button(L, "x", -0.006, 0.212, 0.02, 0.02, () => clearSearch(),
+                      { size: 0.0062, r: 0.01, color: FIELD, enabled: () => inLobby() && !state.activity && !!state.searchQ });
+  UI.actBtn = button(L, "Activity", 0.05, 0.212, 0.07, 0.028, () => toggleActivity(),
+                     { size: 0.0058, r: 0.014, color: FIELD, enabled: inLobby });
+  UI.sortBtn = button(L, "", 0.14, 0.212, 0.085, 0.028, () => cycleSort(),
+                      { size: 0.0056, r: 0.014, color: FIELD, enabled: () => inLobby() && !state.activity });
+  UI.lStatus = label(L, "", 0.355, 0.212, 0.006, 0.0056, C.dim, "right");
+  slab(L, LW - 0.03, 0.0012, 0.001, EDGE, { r: 0.0005, order: 1, pos: "0 0.197 0.0045" });
+  // the scrolling content
+  UI.content = mk("a-entity", {}, L);
+  buildFeatured(UI.content);
+  for (let i = 0; i < COLS * 4; i++) {
+    const card = { m: null, act: null, on: false, inside: false, w: CARD_W, h: CARD_H };
+    const b = card.b = button(UI.content, "", 0, 0, CARD_W, CARD_H,
+      () => { UI.fromCard = card; return card.act ? openActivity(card.act) : openMarket(card.m); },
+      { r: 0.014, color: CARD_BG, opacity: 0.98, enabled: () => inLobby() && card.on && card.inside && (!!card.m || !!(card.act && card.act.ticker)) });
+    rim(b.el, CARD_W, CARD_H, 0.014);
+    const z = b.tz;
+    card.head = label(b.el, "", -0.1, 0.036, z, 0.0052, C.dim, "left");
+    card.stat = label(b.el, "", 0.1, 0.036, z, 0.0052, C.dim, "right");
+    card.icon = iconMesh(b.el, 0.018, -0.092, 0.019, z);
+    card.title = label(b.el, "", -0.1, 0.019, z, 0.0064, C.text, "left");
+    card.rows = [0, 1].map(() => {
+      const g = mk("a-entity", {}, b.el);
+      const row = { g };
+      row.icon = iconMesh(g, 0.018, -0.092, 0, z);
+      row.name = label(g, "", -0.1, 0, z, 0.0066, "#e3e7ec", "left");
+      row.box = slab(g, 0.024, 0.018, 0.002, "#2a2e35", { r: 0.004, order: 2, opacity: 1, pos: `0.036 0 ${z}` });
+      row.score = label(row.box, "", 0, 0, 0.0015, 0.0062, C.text);
+      row.pill = slab(g, 0.052, 0.022, 0.002, CY, { r: 0.011, order: 2, opacity: 0.85, pos: `0.077 0 ${z}` });
+      slab(row.pill, 0.048, 0.018, 0.002, "#15181c", { r: 0.009, order: 3, opacity: 1, pos: "0 0 0.0008" });
+      row.pct = tickerLabel(g, 0.096, 0, z + 0.0025, 0.0082, C.text, "right");
+      return row;
+    });
+    card.foot = label(b.el, "", -0.1, -0.041, z, 0.0050, C.dim, "left");
+    card.vol = label(b.el, "", 0.1, -0.041, z, 0.0050, C.dim, "right");
     CARDS.push(card);
   }
-  UI.lEmpty = label(L, "", 0, -0.03, 0.006, 0.0085, C.dim);
-  UI.lHint = label(L, "% = the market's chance of that answer", -0.308, -0.187, 0.006, 0.0058, C.dim, "left");
-  UI.lPage = label(L, "", 0.17, -0.187, 0.006, 0.0068, C.dim);
-  UI.lPrev = button(L, "<", 0.232, -0.187, 0.056, 0.03, () => { state.page--; turnedPage(); },
-                    { enabled: () => inLobby() && state.page > 0 });
-  UI.lNext = button(L, ">", 0.296, -0.187, 0.056, 0.03, () => { state.page++; turnedPage(); },
-                    { enabled: () => inLobby() && state.page < pageCount() - 1 });
+  UI.lEmpty = label(L, "", CXM, -0.02, 0.006, 0.0085, C.dim);
+  // scroll rail: arrows at the ends, a thumb that shows where you are, and a strip you can drag a finger along
+  UI.rail = mk("a-entity", { position: "0.343 0 0.006" }, L);
+  slab(UI.rail, 0.012, CTOP - CBOT - 0.07, 0.002, FIELD, { r: 0.006, order: 1, opacity: 1, pos: `0 ${(CTOP + CBOT) / 2} 0` });
+  UI.thumb = slab(UI.rail, 0.012, 0.05, 0.003, "#59636f", { r: 0.006, order: 2, opacity: 1, pos: "0 0 0.001" });
+  UI.up = button(UI.rail, "^", 0, CTOP - 0.013, 0.024, 0.024, () => scrollBy(-1),
+                 { size: 0.0075, r: 0.012, color: FIELD, enabled: () => inLobby() && (state.scroll || 0) > 0 });
+  UI.down = button(UI.rail, "v", 0, CBOT + 0.013, 0.024, 0.024, () => scrollBy(1),
+                   { size: 0.0072, r: 0.012, color: FIELD, enabled: () => inLobby() && (state.scroll || 0) < (UI.maxScroll || 0) });
+  UI.railMem = [];
+  buildBar(L);
 }
+
+function buildFeatured(parent) {
+  const F = UI.feat = { m: null, on: false, inside: false, w: CW, h: FEAT_H };
+  const el = slab(parent, CW, FEAT_H, 0.008, CARD_BG, { r: 0.02, opacity: 0.98 });
+  F.b = { el };                                                // shaped like a card, for the grow and shrink animations
+  rim(el, CW, FEAT_H, 0.02);
+  const z = 0.0055;
+  // left: what it is, and the two big answers
+  F.sub = label(el, "", -0.33, 0.087, z, 0.0056, C.dim, "left");
+  F.icon = iconMesh(el, 0.04, -0.31, 0.052, z);
+  F.title = label(el, "", -0.283, 0.072, z, 0.0102, C.text, "left", 0.27, "top");
+  F.status = label(el, "", -0.283, 0.026, z, 0.0066, C.dim, "left");
+  F.opts = [0, 1].map((k) => button(el, "", -0.252 + k * 0.158, -0.012, 0.148, 0.05, () => featPick(k),
+    { size: 0.0084, r: 0.014, color: k ? YE : CY, ink: "#0b0d10", opacity: 1,
+      enabled: () => inLobby() && !state.activity && F.on && F.inside && !!(F.m && F.m.opts[k]) }));
+  F.mine = label(el, "", -0.33, -0.056, z, 0.0064, C.green, "left");
+  F.foot = label(el, "", -0.33, -0.084, z, 0.0054, C.dim, "left");
+  // right: score (or a short summary) and the price history of both answers
+  F.clock = label(el, "", 0.165, 0.086, z, 0.0062, C.dim);
+  F.score = label(el, "", 0.165, 0.064, z, 0.0112, C.text);
+  F.graph = makeGraph(el, 0.165, -0.018, 0.32, 0.118);
+  F.legend = [0, 1].map((k) => label(el, "", 0.008 + k * 0.165, -0.089, z, 0.0062, k ? YE : CY, "left"));
+}
+function featPick(k) {
+  const m = UI.feat.m;
+  if (!m || !m.opts[k]) return;
+  if (m.kind === "list") { m.sel = k; m.rowPage = 0; }
+  UI.fromCard = UI.feat;
+  openMarket(m);
+}
+
+// the category bar: its own strip just under the panel, scrolls sideways with its arrows
+function buildBar(L) {
+  const bar = UI.bar = mk("a-entity", { position: "0 -0.272 0.004" }, L);
+  slab(bar, LW, 0.042, 0.01, "#0c0e11", { r: 0.021, opacity: 1 });
+  rim(bar, LW, 0.042, 0.021);
+  UI.barL = button(bar, "<", -0.347, 0, 0.03, 0.03, () => barShift(-1), { size: 0.008, r: 0.015, color: FIELD, enabled: () => inLobby() && !!UI.barMoreL });
+  UI.barR = button(bar, ">", 0.347, 0, 0.03, 0.03, () => barShift(1), { size: 0.008, r: 0.015, color: FIELD, enabled: () => inLobby() && !!UI.barMoreR });
+  UI.barTabs = [];
+  for (let i = 0; i < 20; i++) {
+    const tab = { id: "", on: false };
+    tab.b = button(bar, "", 0, 0, 0.06, 0.03, () => barPick(tab),
+                   { size: 0.0076, r: 0.015, color: "#0c0e11", opacity: 1, enabled: () => inLobby() && tab.on });
+    tab.line = slab(tab.b.el, 0.04, 0.0026, 0.001, CY, { r: 0.0013, order: 3, opacity: 1, pos: `0 -0.0118 ${tab.b.tz}` });
+    tab.dot = new THREE.Mesh(new THREE.CircleGeometry(0.0028, 16), new THREE.MeshBasicMaterial({ color: C.red }));
+    tab.dot.renderOrder = 5; tab.dot.position.z = tab.b.tz; tab.b.el.object3D.add(tab.dot);
+    tab.b.el.object3D.visible = false;
+    UI.barTabs.push(tab);
+  }
+  state.barStart = 0;
+}
+// the tabs, in the order asked for: All, Live, then Gemini's categories (known ones first)
+function barCats() {
+  const cats = state.cats || [], known = CAT_ORDER.filter((c) => cats.includes(c));
+  return ["All", "Live"].concat(known, cats.filter((c) => !known.includes(c) && c !== "All" && c !== "Live"));
+}
+function barItems() {
+  if (state.activity) return [["positions", "Positions"], ["orders", "Orders"], ["history", "History"]];
+  return barCats().map((c) => [c, c]);
+}
+function barShift(d) { state.barStart = Math.max(0, (state.barStart || 0) + d * 2); UI.barKeep = true; lockFingers(); refresh(); }
+function barPick(tab) {
+  if (state.activity) { state.activity = tab.id; state.scroll = 0; actLoad(); refresh(); return; }
+  state.searchQ = "";
+  selectCat(tab.id);
+}
+function refreshBar() {
+  const items = barItems(), active = state.activity || state.cat, size = 0.0076;
+  const ai = items.findIndex((it) => it[0] === active);
+  if (UI.barActive !== active) { UI.barActive = active; UI.barKeep = false; }
+  const widths = items.map((it) => textWidth(it[1], size) + 0.03 + (it[0] === "Live" ? 0.012 : 0));
+  const fitsFrom = (s) => { let x = -0.326, out = []; for (let i = s; i < items.length; i++) { if (x + widths[i] > 0.326) break; out.push(i); x += widths[i] + 0.006; } return out; };
+  let start = clamp(state.barStart || 0, 0, Math.max(0, items.length - 1));
+  while (start > 0 && fitsFrom(start - 1).includes(items.length - 1)) start--;   // no empty space at the end
+  if (ai >= 0 && !UI.barKeep) {                                            // bring the selected tab into view
+    if (ai < start) start = ai;
+    while (!fitsFrom(start).includes(ai) && start < ai) start++;
+  }
+  state.barStart = start;
+  const shown = fitsFrom(start);
+  let x = -0.326;
+  UI.barTabs.forEach((tab, i) => {
+    const k = shown[i], it = k == null ? null : items[k];
+    tab.on = !!it; tab.b.el.object3D.visible = !!it;
+    if (!it) return;
+    const w = widths[k], on = it[0] === active, dot = it[0] === "Live";
+    tab.id = it[0];
+    setButtonWidth(tab.b, w);
+    tab.b.el.object3D.position.x = x + w / 2; x += w + 0.006;
+    tab.b.t.setAttribute("value", it[1]);
+    tab.b.t.object3D.position.x = dot ? 0.006 : 0;
+    tab.b.t.setAttribute("color", on ? C.text : C.dim);
+    tab.b.el.setColor(on ? "#16292a" : "#0c0e11");
+    tab.line.object3D.visible = on; tab.line.object3D.scale.x = (w - 0.024) / 0.04;
+    tab.dot.visible = dot; tab.dot.position.x = -textWidth(it[1], size) / 2 - 0.002;
+  });
+  UI.barMoreL = start > 0;
+  UI.barMoreR = shown.length > 0 && shown[shown.length - 1] < items.length - 1;
+  UI.barL.t.setAttribute("color", UI.barMoreL ? C.text : "#3d434c");
+  UI.barR.t.setAttribute("color", UI.barMoreR ? C.text : "#3d434c");
+}
+
+/* ---------- what the lobby shows ---------- */
 const curStore = () => state.store[state.cat] || { markets: [], total: 0, loading: true, source: "loading" };
-const pageCount = () => Math.max(1, Math.ceil((state.activity ? activityItems().length :
-                                               Math.max(curStore().total, curStore().markets.length)) / CARDS.length));
-const visibleMarkets = () => curStore().markets.slice(state.page * CARDS.length, (state.page + 1) * CARDS.length);
-function turnedPage() {
-  state.page = clamp(state.page, 0, pageCount() - 1);
-  if (state.activity) return refresh();
-  const st = curStore();
-  if ((state.page + 1) * CARDS.length > st.markets.length && st.markets.length < st.total) loadCat(state.cat, true);
-  refresh(); last.cards = Date.now(); pollOptions(cardOptions());
+// the featured market stays the same until it is gone: a live game if there is one, else the first game, else the first market
+function featuredMarket() {
+  const list = curStore().markets;
+  if (!list.length) return null;
+  const was = state.feat[state.cat], keep = was && list.find((m) => m.ticker === was);
+  if (keep) return keep;
+  const pick = list.find((m) => m.kind === "duel" && m.sport && m.live) || list.find((m) => m.kind === "duel") || list[0];
+  state.feat[state.cat] = pick.ticker;
+  return pick;
 }
+function sortedMarkets() {
+  const list = curStore().markets.slice(), s = state.sort || "default";
+  if (s === "volume") list.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+  if (s === "soon") {
+    const t = (m) => { const d = m.sport && m.start ? m.start : m.closes; return d ? d.getTime() : Infinity; };
+    list.sort((a, b) => t(a) - t(b));
+  }
+  return list;
+}
+function lobbyLayout() {
+  const act = !!state.activity, feat = act ? null : featuredMarket();
+  const items = act ? activityItems() : sortedMarkets().filter((m) => m !== feat);
+  const rows = [];
+  if (feat) rows.push({ feat: true, h: FEAT_H });
+  for (let g = 0; g < Math.ceil(items.length / COLS); g++) rows.push({ g, h: CARD_H });
+  return { act, feat, items, rows };
+}
+// the rows that fit when row r is at the top
+function rowsFrom(rows, r) {
+  const out = []; let y = CTOP;
+  for (let i = r; i < rows.length; i++) { if (y - rows[i].h < CBOT - 0.002) break; out.push({ row: rows[i], top: y }); y -= rows[i].h + GAP; }
+  return out;
+}
+function maxScroll(rows) { for (let r = 0; r < rows.length; r++) if (rowsFrom(rows, r).length === rows.length - r) return r; return 0; }
+const visibleMarkets = () => (UI.feat && UI.feat.on && UI.feat.m ? [UI.feat.m] : []).concat(CARDS.filter((c) => c.on && c.m).map((c) => c.m));
+// while the content slides, anything not fully inside the scrolling area is hidden
+function clipContent() {
+  const off = UI.content.object3D.position.y;
+  [UI.feat].concat(CARDS).forEach((t) => {
+    const top = (t.top || 0) + off, inside = top <= CTOP + 0.003 && top - t.h >= CBOT - 0.003;
+    t.inside = inside;
+    t.b.el.object3D.visible = t.on && inside;
+  });
+}
+// one row up or down, with a short slide
+function scrollBy(d) {
+  if (!inLobby() || UI.trans) return;
+  const rows = lobbyLayout().rows, max = maxScroll(rows), from = state.scroll || 0, to = clamp(from + d, 0, max);
+  if (to === from) return;
+  const shift = d > 0 ? rows[from].h + GAP : -(rows[to].h + GAP);
+  state.scroll = to; lockFingers();
+  refresh();
+  const o = UI.content.object3D;
+  o.position.y = -shift; clipContent();
+  tween("scroll", 240, (k) => { o.position.y = -shift * (1 - easeOut(k)); clipContent(); }, () => { o.position.y = 0; clipContent(); refresh(); });
+  last.cards = Date.now(); pollOptions(cardOptions());
+  maybeLoadMore(rows);
+}
+function maybeLoadMore(rows) {
+  if (state.activity) return;
+  const st = curStore();
+  if (!st.loading && st.markets.length < st.total && (state.scroll || 0) + 6 >= rows.length) loadCat(state.cat, true);
+}
+// a finger dragged along the rail scrolls, like a scroll bar: down shows what is further down
+function railTouch(i, joints) {
+  if (!UI.rail || !joints || !inLobby() || UI.trans) return;
+  const mem = UI.railMem[i] || (UI.railMem[i] = { on: false, y: 0 });
+  const p = UI.rail.object3D.worldToLocal(vTmp.copy(joints[9]));
+  const inside = Math.abs(p.x) < 0.02 && Math.abs(p.z) < 0.03 && p.y < CTOP - 0.028 && p.y > CBOT + 0.028;
+  if (!inside) { mem.on = false; return; }
+  if (!mem.on) { mem.on = true; mem.y = p.y; return; }
+  const dy = p.y - mem.y;
+  if (Math.abs(dy) > 0.028) { scrollBy(dy < 0 ? 1 : -1); mem.y = p.y; }
+}
+window.addEventListener("wheel", (e) => {
+  if (!inLobby()) return;
+  const now = performance.now();
+  if (now - (UI.wheelT || 0) < 260) return;
+  UI.wheelT = now; scrollBy(e.deltaY > 0 ? 1 : -1);
+}, { passive: true });
+function refreshRail(rows) {
+  const max = UI.maxScroll = maxScroll(rows), s = state.scroll || 0, len = CTOP - CBOT - 0.07;
+  UI.rail.object3D.visible = max > 0;
+  const th = Math.max(0.03, len * rowsFrom(rows, s).length / Math.max(1, rows.length));
+  UI.thumb.object3D.scale.y = th / 0.05;
+  UI.thumb.object3D.position.y = (CTOP + CBOT) / 2 + (len - th) / 2 - (max ? s / max : 0) * (len - th);
+}
+
 function selectCat(name) {
   if (!name) return;
-  state.cat = name; state.page = 0;
+  state.cat = name; state.scroll = 0;
   const st = state.store[name];
   if (!st || (!st.loading && Date.now() - st.loadedAt > S.lobbyRefreshSec * 1000)) loadCat(name, false);
   refresh(); last.cards = Date.now(); pollOptions(cardOptions());
+}
+function cycleSort() {
+  const i = LOBBY_SORTS.findIndex((s) => s[0] === (state.sort || "default"));
+  state.sort = LOBBY_SORTS[(i + 1) % LOBBY_SORTS.length][0];
+  state.scroll = 0; refresh(); last.cards = Date.now(); pollOptions(cardOptions());
+}
+
+/* ---------- search by voice: press the search field, Grok asks what to look for ---------- */
+function searchPress() {
+  if (!S.assistant || !S.serverUrl) { UI.searchText.setAttribute("value", "Voice search needs the assistant"); return; }
+  if (AI.ready === false) return aiNote("Grok is not set up on the server yet");
+  AI.searchNext = performance.now(); AI.hopT = performance.now();
+  const ask = () => aiSpeak("What should I look for?", "awake");
+  if (AI.mode === "sleep") { AI.wakeT = performance.now(); if (!AI.listening) wakeStart().then(ask); else ask(); }
+  else { aiHush(); ask(); }
+  refresh();
+}
+function doSearch(q) {
+  q = clean(q).slice(0, 60);
+  if (!q) return;
+  if (inMarket()) backToLobby();
+  if (!state.searchQ && state.cat.indexOf("search:") !== 0) state.prevCat = state.cat;
+  state.activity = ""; state.searchQ = q;
+  const key = "search:" + q.toLowerCase();
+  delete state.store[key];                                   // fresh results every time
+  selectCat(key);
+}
+function clearSearch() { state.searchQ = ""; AI.searchNext = 0; selectCat(state.prevCat || S.startCategory); }
+
+/* ---------- live scores and game clock, from ESPN's public scoreboard ----------
+   Gemini's API has no score or clock. ESPN's scoreboard (site.api.espn.com, no key, allows web pages) does.
+   It is unofficial and undocumented, so it can change; when a game is not found, no score is shown. */
+const ESPN = "https://site.api.espn.com/apis/site/v2/sports/";
+const LEAGUES = [[/wnba/i, "basketball/wnba", ""],
+  [/women.*college basketball|ncaaw/i, "basketball/womens-college-basketball", "?groups=50&limit=300"],
+  [/college basketball|ncaab/i, "basketball/mens-college-basketball", "?groups=50&limit=300"],
+  [/pro basketball|nba/i, "basketball/nba", ""],
+  [/college football|ncaaf/i, "football/college-football", "?groups=80&limit=300"],
+  [/pro football|nfl/i, "football/nfl", ""],
+  [/hockey|nhl/i, "hockey/nhl", ""],
+  [/baseball|mlb/i, "baseball/mlb", ""]];
+const SCORES = { boards: {}, at: {}, busy: {} };
+function leagueOf(m) {
+  if (!m || m.kind !== "duel" || !m.sport) return null;
+  const s = (m.sub || "") + " " + (m.tags || "");
+  return LEAGUES.find((l) => l[0].test(s)) || null;
+}
+function espnGame(e) {
+  const c = e && e.competitions && e.competitions[0];
+  if (!c) return null;
+  const ty = (c.status || e.status || {}).type || {};
+  return { t: Date.parse(e.date), state: ty.state || "pre", detail: clean(ty.shortDetail || ty.detail || ""),
+           teams: (c.competitors || []).map((t) => {
+             const tm = t.team || {};
+             return { side: t.homeAway, abbr: String(tm.abbreviation || "").toUpperCase(), score: t.score,
+                      names: [tm.displayName, tm.shortDisplayName, tm.location, tm.name].filter(Boolean).map((s) => clean(s).toLowerCase()) };
+           }) };
+}
+function scoresTick() {
+  const want = {};
+  visibleMarkets().concat(inMarket() ? [state.market] : []).forEach((m) => { const L = leagueOf(m); if (L) want[L[1]] = L; });
+  Object.keys(want).forEach((k) => {
+    const now = Date.now(), b = SCORES.boards[k], liveNow = b && b.some((g) => g.state === "in");
+    if (SCORES.busy[k] || now - (SCORES.at[k] || 0) < (liveNow ? 30000 : 120000)) return;
+    SCORES.busy[k] = true; SCORES.at[k] = now;
+    getJSON(ESPN + k + "/scoreboard" + want[k][2], 15000)
+      .then((j) => { SCORES.boards[k] = (j.events || []).map(espnGame).filter(Boolean); refresh(); })
+      .catch((err) => console.warn("ESPN scores:", err))
+      .finally(() => { SCORES.busy[k] = false; });
+  });
+}
+// the score of a game market, or null. a = first answer (away team), b = second (home)
+function scoreFor(m) {
+  const L = leagueOf(m), games = L && SCORES.boards[L[1]];
+  if (!games) return null;
+  const o0 = m.opts[0], o1 = m.opts[1];
+  const same = (o, t) => (!!o.abbr && o.abbr.toUpperCase() === t.abbr) || t.names.includes(o.name.toLowerCase());
+  const g = games.find((g) => g.teams.length === 2 && (!m.start || Math.abs(g.t - m.start.getTime()) < 12 * 3600e3) &&
+                              g.teams.some((t) => same(o0, t)) && g.teams.some((t) => same(o1, t)));
+  if (!g) return null;
+  const tOf = (o) => g.teams.find((t) => same(o, t));
+  const a = tOf(o0), b = tOf(o1);
+  if (!a || !b || a === b) return null;
+  return { state: g.state, detail: g.detail, a: a.score, b: b.score, aAbbr: o0.abbr || a.abbr, bAbbr: o1.abbr || b.abbr };
+}
+const volText = (v) => (v ? "$" + Math.round(v).toLocaleString("en-US") + " vol" : "");
+function updatedAgo(m) {
+  const t = Math.max(m.loadedAt || 0, ...m.opts.slice(0, 2).map((o) => o.at || 0));
+  if (!t) return "";
+  const s = (Date.now() - t) / 1000;
+  return s < 60 ? Math.max(1, Math.round(s)) + "s ago" : Math.round(s / 60) + "m ago";
+}
+function featFoot(m) {
+  const parts = [];
+  if (m.volume) parts.push(volText(m.volume));
+  const ago = updatedAgo(m);
+  if (ago) parts.push("odds " + ago);
+  if (m.kind === "duel" && scoreFor(m)) parts.push("score: ESPN");
+  return parts.join("    ");
 }
 
 /* ---------- market view ---------- */
@@ -1270,7 +1590,7 @@ function openMarket(m) {
 }
 // the card you pressed lifts off and grows into the board; then it fades and the market is underneath
 const COURT_SCALE = 0.85;   // size of the table and court (1 = original)
-const STAGE_LOBBY = { y: 0.235, z: 0.0, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
+const STAGE_LOBBY = { y: 0.30, z: 0.0, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
 function setStage(k) {
   state.stage = k;
   const mix = (a, b) => a + (b - a) * k, o = UI.lobby.object3D;
@@ -1280,6 +1600,7 @@ function setStage(k) {
   b.visible = k > 0.01;
   b.scale.set((0.55 + 0.45 * g) * COURT_SCALE, 1, (0.55 + 0.45 * g) * COURT_SCALE);                 // the table grows out from its middle
   b.position.y = -0.015 * (1 - k);
+  if (UI.bar) UI.bar.object3D.visible = k < 0.5;
 }
 // opening a market: the list slides back and the table grows in, then the pressed card grows into the board
 function growIntoBoard(card, after) {
@@ -1288,10 +1609,15 @@ function growIntoBoard(card, after) {
   const from = state.stage || 0;
   tween("stage", 420, (k) => setStage(from + (1 - from) * easeOut(k)), () => { growCard(card); if (after) after(); });
 }
+// where a card is on the panel, and its size compared with the board
+function tileGeom(card) {
+  if (!card || !card.b) return null;
+  const p = UI.lobby.object3D.worldToLocal(card.b.el.object3D.getWorldPosition(new THREE.Vector3()));
+  return { x: p.x, y: p.y, sx: card.w / 0.66, sy: card.h / 0.42 };
+}
 function growCard(card) {
   const g = UI.ghost, o = g.object3D, mat = g.getObject3D("mesh").material;
-  const fx = card ? card.b.el.object3D.position.x : 0, fy = card ? card.b.el.object3D.position.y : 0;
-  const sx = card ? 0.30 / 0.66 : 0.6, sy = card ? 0.082 / 0.42 : 0.6;
+  const tg = tileGeom(card), fx = tg ? tg.x : 0, fy = tg ? tg.y : 0, sx = tg ? tg.sx : 0.6, sy = tg ? tg.sy : 0.6;
   UI.trans = true;
   UI.lobby.setAttribute("visible", true); UI.game.setAttribute("visible", false);
   g.setAttribute("visible", true);
@@ -1308,9 +1634,8 @@ function growCard(card) {
 // going back: the board shrinks into the market's card in the list and fades away
 function shrinkIntoCard(ticker) {
   const g = UI.ghost, o = g.object3D, mat = g.getObject3D("mesh").material;
-  const card = CARDS.find((c) => c.m && c.m.ticker === ticker && c.b.el.getAttribute("visible"));
-  const tx = card ? card.b.el.object3D.position.x : 0, ty = card ? card.b.el.object3D.position.y : 0;
-  const sx = card ? 0.30 / 0.66 : 0.5, sy = card ? 0.082 / 0.42 : 0.5;
+  const card = [UI.feat].concat(CARDS).find((c) => c.on && c.inside && c.m && c.m.ticker === ticker);
+  const tg = tileGeom(card), tx = tg ? tg.x : 0, ty = tg ? tg.y : 0, sx = tg ? tg.sx : 0.5, sy = tg ? tg.sy : 0.5;
   g.setAttribute("visible", true);
   tween("board", 450, (k) => {
     const a = easeOut(k);
@@ -1515,7 +1840,8 @@ function toMarket(e) {
                                  color: accent(c.color) || SPARE[i % SPARE.length],
                                  price: priceOf(c), sym: c.instrumentSymbol || "", hist: null,
                                  bid: num(c.prices && c.prices.bestBid), ask: num(c.prices && c.prices.bestAsk),
-                                 closed: !!c.marketState && c.marketState !== "open", image: c.imageUrl || "" }));
+                                 closed: !!c.marketState && c.marketState !== "open", image: c.imageUrl || "",
+                                 abbr: clean(c.abbreviatedName), side: c.sportsSide || "" }));
   if (opts.length === 2 && opts[0].price === null && opts[1].price !== null) opts[0].price = 1 - opts[1].price;
   if (opts.length === 2 && opts[1].price === null && opts[0].price !== null) opts[1].price = 1 - opts[0].price;
   opts = opts.filter((o) => o.price !== null);
@@ -1530,7 +1856,8 @@ function toMarket(e) {
   return { ticker: e.ticker, title: clean(e.title) || "Market", category: e.category || "", sub, image: e.imageUrl || "",
            kind: duel ? "duel" : "list", opts, sel: 0, rowPage: 0,
            court: isGame, hoops: isGame && /basketball/i.test(sub),
-           sport: e.category === "Sports", live: !!e.isLive, start: date(e.startTime), closes: date(e.expiryDate) };
+           sport: e.category === "Sports", live: !!e.isLive, start: date(e.startTime), closes: date(e.expiryDate),
+           volume: parseFloat(e.volume) || 0, tags: (e.tags || []).join(" ") };
 }
 function sampleMarkets() {
   return S.sampleGames.map((g, i) => ({ ticker: "SAMPLE-" + i, title: g.title, category: "Sample", sub: "Pro Basketball",
@@ -1555,8 +1882,7 @@ async function loadCats() {
   } catch (err) { console.warn("Gemini categories:", err); }
   state.catsFromGemini = cats.length > 0;
   if (!cats.length) cats = S.fallbackCategories.slice();
-  state.cats = cats.slice(0, TABS.length);
-  TABS.forEach((tab, i) => { tab.name = state.cats[i] || ""; tab.b.t.setAttribute("value", trunc(tab.name, 13)); });
+  state.cats = cats;
   selectCat(state.cats.includes(S.startCategory) ? S.startCategory : state.cats[0]);
 }
 // 2) the markets of one category, 12 at a time (more are fetched when you page forward)
@@ -1567,14 +1893,26 @@ async function loadCat(cat, more) {
   st.loading = true;
   refresh();
   try {
-    const offset = more ? st.markets.length : 0;
-    const j = await getJSON(GEMINI + "/events?status=active&category=" + encodeURIComponent(cat) + "&limit=12&offset=" + offset, 45000);
-    const list = (Array.isArray(j) ? j : j.data || []).map(toMarket).filter(Boolean);
+    const offset = more ? (st.raw || st.markets.length) : 0, base = GEMINI + "/events?status=active";
+    const url = cat.indexOf("search:") === 0 ? base + "&limit=12&offset=" + offset + "&search=" + encodeURIComponent(cat.slice(7)) :
+                cat === "All" ? base + "&limit=12&offset=" + offset :
+                cat === "Live" ? base + "&limit=30&offset=" + offset :
+                base + "&category=" + encodeURIComponent(cat) + "&limit=12&offset=" + offset;
+    const j = await getJSON(url, 45000);
+    let list = (Array.isArray(j) ? j : j.data || []).map(toMarket).filter(Boolean);
+    const raw = Array.isArray(j) ? j.length : (j.data || []).length;
+    if (cat === "Live") list = list.filter((m) => m.live);              // Gemini has no live filter; live events come first
+    const old = new Map(st.markets.map((m) => [m.ticker, m]));
+    list.forEach((m) => {                                              // same market as before: keep its history and price times
+      m.loadedAt = Date.now();
+      const p = old.get(m.ticker);
+      if (p) m.opts.forEach((o) => { const q = p.opts.find((x) => x.sym === o.sym); if (q) { o.hist = q.hist; o.at = q.at; if (q.dead) o.dead = true; } });
+    });
     const keep = more ? st.markets.slice() : [];
     list.forEach((m) => { if (!keep.some((k) => k.ticker === m.ticker)) keep.push(m); });
-    st.markets = keep; st.source = "live";
-    const raw = Array.isArray(j) ? j.length : (j.data || []).length;
-    st.total = raw === 0 || !j.pagination ? keep.length : Math.max(keep.length, j.pagination.total || 0);
+    st.markets = keep; st.source = "live"; st.raw = offset + raw;
+    st.total = cat === "Live" ? (raw === 0 || !list.length ? keep.length : keep.length + 1) :
+               raw === 0 || !j.pagination ? keep.length : Math.max(keep.length, j.pagination.total || 0);
   } catch (err) {
     console.warn("Gemini markets (" + cat + "):", err);
     if (st.source !== "live") { st.source = "sample"; st.markets = sampleMarkets(); st.total = st.markets.length; }
@@ -1589,7 +1927,7 @@ async function pollOptions(opts, m) {
   await Promise.all(opts.filter((o) => o && o.sym && !o.dead).map((o) =>
     getJSON(GEMINI_TICKER + encodeURIComponent(o.sym), 8000).then((j) => {
       const p = midPrice(j.bid, j.ask, j.last);
-      o.bid = num(j.bid); o.ask = num(j.ask);                  // Gemini's real sell and buy prices, used for live orders
+      o.bid = num(j.bid); o.ask = num(j.ask); o.at = Date.now();   // Gemini's real sell and buy prices, used for live orders
       if (p === null || (state.sim && m && m === state.market)) return;
       o.price = clamp(p, 0.01, 0.99); changed = true;
       if (o.hist && o.hist.loaded) { o.hist.pts.push({ t: Date.now(), p: o.price }); if (o.hist.pts.length > 600) o.hist.pts.shift(); }
@@ -1619,6 +1957,8 @@ function viewOptions() {
 }
 // runs once a second and decides what, if anything, needs a fresh download
 function dataTick() {
+  scoresTick();
+  if (inLobby() && UI.feat && UI.feat.on && UI.feat.m) UI.feat.foot.setAttribute("value", featFoot(UI.feat.m));
   if (state.sim) return;
   const now = Date.now(), st = state.store[state.cat];
   if (inMarket()) {
@@ -1627,7 +1967,7 @@ function dataTick() {
     return;
   }
   if (!st || st.loading) return;
-  if (st.source === "sample" ? now - st.loadedAt > 60000 : (state.page === 0 && now - st.loadedAt > S.lobbyRefreshSec * 1000)) loadCat(state.cat, false);
+  if (st.source === "sample" ? now - st.loadedAt > 60000 : ((state.scroll || 0) === 0 && now - st.loadedAt > S.lobbyRefreshSec * 1000)) loadCat(state.cat, false);
   else if (now - last.cards >= 15000) { last.cards = now; pollOptions(cardOptions()); }
 }
 
@@ -1684,50 +2024,157 @@ function refreshPanel() {
   UI.knob.object3D.position.x = (clamp(state.amount / sliderMax(), 0, 1) - 0.5) * 0.29;
 }
 function refreshLobby() {
-  if (state.activity) return refreshActivity();
-  UI.lTitle.setAttribute("value", "Markets"); UI.actBtn.t.setAttribute("value", "Activity");
-  UI.actTabs.forEach((b) => b.el.setAttribute("visible", false));
-  UI.lHint.setAttribute("value", "% = the market's chance of that answer");
-  CARDS.forEach((card) => { card.act = null; });
-  const st = curStore();
-  state.page = clamp(state.page, 0, pageCount() - 1);
-  UI.lStatus.setAttribute("value", st.loading ? "Loading from Gemini..." : st.source === "live" ? "Live from Gemini" : "Sample markets (Gemini unreachable)");
-  UI.lStatus.setAttribute("color", !st.loading && st.source === "live" ? C.green : C.dim);
-  TABS.forEach((tab) => {
-    const onNow = tab.name && tab.name === state.cat;
-    tab.b.el.setAttribute("visible", !!tab.name);
-    tab.b.el.setColor(onNow ? C.keyOn : C.panel);
-    tab.b.t.setAttribute("color", onNow ? C.text : C.dim);
+  const lay = lobbyLayout(), act = lay.act, st = curStore();
+  state.scroll = clamp(state.scroll || 0, 0, maxScroll(lay.rows));
+  // header
+  UI.actBtn.t.setAttribute("value", act ? "Markets" : "Activity");
+  UI.search.el.object3D.visible = !act; UI.sortBtn.el.object3D.visible = !act;
+  UI.searchX.el.object3D.visible = !act && !!state.searchQ;
+  const listening = AI.searchNext && performance.now() - AI.searchNext < 30000;
+  UI.searchText.setAttribute("value", listening ? "Listening: say what to find" : state.searchQ ? '"' + trunc(state.searchQ, 22) + '"' : "Search events (say it)");
+  UI.searchText.setAttribute("color", listening ? CY : state.searchQ ? C.text : C.dim);
+  UI.sortBtn.t.setAttribute("value", "Sort: " + LOBBY_SORTS.find((s) => s[0] === (state.sort || "default"))[1]);
+  UI.lStatus.setAttribute("value", act ? (LIVE.on ? "Your Gemini account" : "Test money") :
+                                   st.loading ? "Loading..." : st.source === "live" ? "Live from Gemini" : "Sample markets");
+  UI.lStatus.setAttribute("color", act ? (LIVE.on ? C.green : C.dim) : !st.loading && st.source === "live" ? C.green : C.dim);
+  // lay out the rows that fit, from the current scroll position
+  const F = UI.feat;
+  F.on = false; CARDS.forEach((c) => { c.on = false; });
+  let pool = 0;
+  rowsFrom(lay.rows, state.scroll).forEach(({ row, top }) => {
+    if (row.feat) { F.on = true; F.top = top; F.b.el.object3D.position.set(CXM, top - FEAT_H / 2, 0.006); fillFeatured(lay.feat); return; }
+    for (let c = 0; c < COLS; c++) {
+      const it = lay.items[row.g * COLS + c], card = it && CARDS[pool++];
+      if (!card) continue;
+      card.on = true; card.top = top;
+      card.b.el.object3D.position.set(CX0 + CARD_W / 2 + c * (CARD_W + 0.01), top - CARD_H / 2, 0.007);
+      if (act) fillActCard(card, it); else fillCard(card, it);
+    }
   });
-  UI.lPage.setAttribute("value", pageCount() > 1 ? `${state.page + 1} / ${pageCount()}` : "");
-  UI.lPrev.el.setAttribute("visible", pageCount() > 1); UI.lNext.el.setAttribute("visible", pageCount() > 1);
-  const shown = visibleMarkets();
-  UI.lEmpty.setAttribute("value", shown.length ? "" : st.loading ? "Loading..." : "No open markets here right now");
-  CARDS.forEach((card, i) => {
-    const m = card.m = shown[i] || null;
-    card.b.el.setAttribute("visible", !!m);
-    if (!m) return;
-    card.title.object3D.position.x = setIcon(card.icon, m.image) ? -0.11 : -0.138;
-    card.title.setAttribute("value", trunc(m.title, 40));
-    const mine = stakedOn(m), live = m.sport && m.live;
-    card.foot.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : whenText(m));
-    card.foot.setAttribute("color", mine > 0 ? C.green : live ? C.red : C.dim);
-    card.livePulse = live && !(mine > 0);
-    card.rows.forEach((row, k) => {
-      const o = m.opts[k];
-      row.chip.setAttribute("visible", !!o);
-      row.name.setAttribute("value", o ? trunc(o.name, 12) : ""); setTicker(row.pct, o ? pct(o.price) : "", o ? m.ticker + "|" + k : "");
-      if (o) row.chip.setColor(o.color);
-    });
+  if (!F.on) F.m = null;
+  CARDS.forEach((c) => { if (!c.on) { c.m = null; c.act = null; c.livePulse = false; } });
+  clipContent();
+  const none = !lay.items.length && !lay.feat;
+  UI.lEmpty.setAttribute("value", !none ? "" : act ? (state.activity === "positions" ? "No open positions" : state.activity === "orders" ? "No orders yet" : "No receipts yet") :
+                                  st.loading ? "Loading..." : state.cat === "Live" ? "Nothing is live right now" :
+                                  state.searchQ ? "No open markets match that" : "No open markets here right now");
+  refreshRail(lay.rows);
+  refreshBar();
+}
+// the big card at the top
+function fillFeatured(m) {
+  const F = UI.feat;
+  if (F.lastTicker !== m.ticker) { F.lastTicker = m.ticker; F.graph.reveal(); }
+  F.m = m;
+  const x = setIcon(F.icon, m.image) ? -0.283 : -0.33;
+  F.title.object3D.position.x = F.status.object3D.position.x = x;
+  F.sub.setAttribute("value", trunc(m.sub || m.category || "", 40));
+  F.title.setAttribute("value", trunc(m.title, 56));
+  const sc = m.kind === "duel" ? scoreFor(m) : null, live = sc ? sc.state === "in" : !!(m.sport && m.live);
+  F.status.setAttribute("value", live ? "LIVE" : whenText(m));
+  F.status.setAttribute("color", live ? C.red : C.dim);
+  F.livePulse = live;
+  const two = m.opts.slice(0, 2);
+  F.opts.forEach((b, k) => {
+    const o = two[k];
+    b.el.object3D.visible = !!o;
+    if (o) b.t.setAttribute("value", (m.kind === "duel" && o.abbr ? o.abbr : trunc(o.name, 12)) + "  " + pct(o.price));
   });
+  const mine = stakedOn(m);
+  F.mine.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : m.kind === "list" && m.opts.length > 2 ? "+" + (m.opts.length - 2) + " more answers inside" : "");
+  F.mine.setAttribute("color", mine > 0 ? C.green : C.dim);
+  F.foot.setAttribute("value", featFoot(m));
+  // right side: the score when ESPN has this game, otherwise a plain summary (never a made-up score)
+  if (sc && sc.state !== "pre") {
+    F.clock.setAttribute("value", sc.state === "in" ? "LIVE   " + sc.detail : sc.detail);
+    F.clock.setAttribute("color", sc.state === "in" ? C.red : C.dim);
+    F.score.setAttribute("value", `${sc.aAbbr}   ${sc.a} - ${sc.b}   ${sc.bAbbr}`);
+  } else if (m.kind === "duel") {
+    F.clock.setAttribute("value", whenText(m)); F.clock.setAttribute("color", C.dim);
+    F.score.setAttribute("value", trunc(two[0].abbr || two[0].name, 12) + "  vs  " + trunc(two[1].abbr || two[1].name, 12));
+  } else {
+    F.clock.setAttribute("value", "Most likely answer"); F.clock.setAttribute("color", C.dim);
+    F.score.setAttribute("value", trunc(two[0].name, 20) + "  " + pct(two[0].price));
+  }
+  F.clockLive = !!(sc && sc.state === "in");
+  // the two answers' price history, cyan and yellow, with matching labels underneath
+  two.forEach((o) => { if (o.sym && !o.hist) loadHist(o); });
+  const waiting = two.some((o) => o.sym && (!o.hist || !o.hist.loaded));
+  F.graph.set(two.map((o, k) => ({ color: k ? YE : CY, pts: o.hist && o.hist.loaded ? o.hist.pts : [] })),
+              m.sample ? "No history for sample markets" : waiting ? "Loading history..." : "Last 24 hours");
+  F.legend.forEach((lb, k) => lb.setAttribute("value", two[k] ? "- " + trunc(two[k].name, 13) + "  " + pct(two[k].price) : ""));
+}
+// one market card in the grid
+function fillCard(card, m) {
+  card.m = m; card.act = null;
+  const duel = m.kind === "duel", sc = duel ? scoreFor(m) : null, mine = stakedOn(m);
+  const live = sc ? sc.state === "in" : !!(m.sport && m.live);
+  card.head.setAttribute("value", trunc(m.sub || m.category || "", 24));
+  card.stat.setAttribute("value", trunc(sc && sc.state !== "pre" ? (sc.state === "in" ? "LIVE " + sc.detail : sc.detail) : live ? "LIVE" : whenText(m), 20));
+  card.stat.setAttribute("color", live ? C.red : C.dim);
+  card.livePulse = live;
+  card.title.object3D.visible = !duel;
+  if (duel) card.icon.visible = false;
+  else {
+    const ic = setIcon(card.icon, m.image);
+    card.title.object3D.position.x = ic ? -0.078 : -0.1;
+    card.title.setAttribute("value", trunc(m.title, ic ? 27 : 31));
+  }
+  const ys = duel ? [0.012, -0.014] : [-0.004, -0.026];
+  card.rows.forEach((row, k) => {
+    const o = m.opts[k];
+    row.g.object3D.visible = !!o;
+    if (!o) return;
+    row.g.object3D.position.y = ys[k];
+    const ic = duel && setIcon(row.icon, o.image);
+    if (!duel) row.icon.visible = false;
+    row.name.object3D.position.x = ic ? -0.078 : -0.1;
+    row.name.setAttribute("value", trunc(o.name, duel ? 13 : 18));
+    row.name.setAttribute("color", "#e3e7ec");
+    const s = sc && sc.state !== "pre" ? (k ? sc.b : sc.a) : null;
+    row.box.object3D.visible = s != null && s !== "";
+    row.score.setAttribute("value", s == null ? "" : String(s));
+    row.pill.object3D.visible = true;
+    const t = pct(o.price);
+    setTicker(row.pct, t, m.ticker + "|" + k);
+    centerTicker(row.pct, 0.077, t);
+  });
+  card.foot.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : !duel && m.opts.length > 2 ? "+" + (m.opts.length - 2) + " more" : "");
+  card.foot.setAttribute("color", mine > 0 ? C.green : C.dim);
+  card.vol.setAttribute("value", volText(m.volume));
+}
+// a card in the Activity view: a position, an order, or an Arc receipt
+function fillActCard(card, it) {
+  card.act = it; card.m = null; card.livePulse = false;
+  card.head.setAttribute("value", { positions: "Position", orders: "Order", history: "Receipt" }[state.activity] || "");
+  card.stat.setAttribute("value", "");
+  card.title.object3D.visible = true;
+  const ic = setIcon(card.icon, it.img);
+  card.title.object3D.position.x = ic ? -0.078 : -0.1;
+  card.title.setAttribute("value", trunc(it.title || "", ic ? 27 : 31));
+  [[it.a, it.av], [it.b, it.bv]].forEach(([name, val], k) => {
+    const row = card.rows[k];
+    row.g.object3D.visible = !!(name || val);
+    row.g.object3D.position.y = [-0.004, -0.026][k];
+    row.icon.visible = false; row.box.object3D.visible = false; row.pill.object3D.visible = false;
+    row.name.object3D.position.x = -0.1;
+    row.name.setAttribute("value", trunc(name || "", 18));
+    row.name.setAttribute("color", k === 0 && it.color ? it.color : "#e3e7ec");
+    setTicker(row.pct, val || "", "act|" + state.activity + "|" + (it.ticker || "") + "|" + (it.sym || "") + "|" + (it.outcome || "") + "|" + k);
+    row.pct.object3D.position.x = 0.1;
+  });
+  card.foot.setAttribute("value", trunc(it.foot || "", 40)); card.foot.setAttribute("color", C.dim);
+  card.vol.setAttribute("value", "");
 }
 function refreshMarket() {
   const m = state.market, legs = legsOf(m), now = performance.now(), live = curStore().source === "live" && !m.sample;
   UI.title.object3D.position.x = setIcon(UI.titleIcon, m.image) ? -0.264 : -0.308;
   UI.title.setAttribute("value", trunc(m.title, 110));
-  UI.when.setAttribute("value", whenText(m));
-  UI.when.setAttribute("color", m.sport && m.live ? C.red : C.dim);
-  UI.whenLive = !!(m.sport && m.live);
+  const sc = m.kind === "duel" ? scoreFor(m) : null;
+  UI.when.setAttribute("value", sc && sc.state !== "pre" ? (sc.state === "in" ? "LIVE   " : "FINAL   ") + `${sc.aAbbr} ${sc.a} - ${sc.b} ${sc.bAbbr}` +
+                                (sc.state === "in" ? "   " + sc.detail : "") + "   (score: ESPN)" : whenText(m));
+  UI.when.setAttribute("color", (sc ? sc.state === "in" : m.sport && m.live) ? C.red : C.dim);
+  UI.whenLive = sc ? sc.state === "in" : !!(m.sport && m.live);
   UI.status.setAttribute("value", state.sim ? "Simulated odds (demo, not real)" : LIVE.on ? "LIVE: real orders on Gemini" :
                                   live ? "Live odds from Gemini" : "Sample odds");
   UI.status.setAttribute("color", !state.sim && live ? C.green : C.dim);
@@ -1951,7 +2398,7 @@ function syncPicksFor(m) {
   });
 }
 function toggleActivity() {
-  state.activity = state.activity ? "" : "positions"; state.page = 0;
+  state.activity = state.activity ? "" : "positions"; state.scroll = 0;
   actLoad(); refresh();
 }
 function actLoad() {
@@ -2004,42 +2451,10 @@ function activityItems() {
   }
   return out;
 }
-function refreshActivity() {
-  const items = activityItems();
-  state.page = clamp(state.page, 0, pageCount() - 1);
-  UI.lTitle.setAttribute("value", "Activity"); UI.actBtn.t.setAttribute("value", "Markets");
-  UI.lStatus.setAttribute("value", LIVE.on ? "Your Gemini account" : "Test money (saved in this browser)");
-  UI.lStatus.setAttribute("color", LIVE.on ? C.green : C.dim);
-  TABS.forEach((tab) => tab.b.el.setAttribute("visible", false));
-  UI.actTabs.forEach((b) => {
-    const on = b.id === state.activity;
-    b.el.setAttribute("visible", true); b.el.setColor(on ? C.keyOn : C.panel); b.t.setAttribute("color", on ? C.text : C.dim);
-  });
-  UI.lHint.setAttribute("value", state.activity === "history" ? "Every lock and release on Arc" : "Press one to open that market");
-  UI.lPage.setAttribute("value", pageCount() > 1 ? `${state.page + 1} / ${pageCount()}` : "");
-  UI.lPrev.el.setAttribute("visible", pageCount() > 1); UI.lNext.el.setAttribute("visible", pageCount() > 1);
-  const shown = items.slice(state.page * CARDS.length, (state.page + 1) * CARDS.length);
-  UI.lEmpty.setAttribute("value", shown.length ? "" : state.activity === "positions" ? "No open positions" :
-                                                    state.activity === "orders" ? "No orders yet" : "No receipts yet");
-  CARDS.forEach((card, i) => {
-    const it = card.act = shown[i] || null;
-    card.m = null; card.livePulse = false;
-    card.b.el.setAttribute("visible", !!it);
-    if (!it) return;
-    card.title.object3D.position.x = setIcon(card.icon, it.img) ? -0.11 : -0.138;
-    card.title.setAttribute("value", trunc(it.title || "", 40));
-    card.foot.setAttribute("value", it.foot || ""); card.foot.setAttribute("color", C.dim);
-    [[it.a, it.av], [it.b, it.bv]].forEach(([name, val], k) => {
-      const row = card.rows[k];
-      row.chip.setAttribute("visible", k === 0 && !!name); if (k === 0) row.chip.setColor(it.color || C.line);
-      row.name.setAttribute("value", trunc(name || "", 16)); setTicker(row.pct, val || "", "act|" + state.activity + "|" + (it.ticker || "") + "|" + (it.sym || "") + "|" + (it.outcome || "") + "|" + k);
-    });
-  });
-}
 // open the market an activity item belongs to, with its cash pile
 function openActivity(it) {
   if (!it || !it.ticker || state.opening) return;
-  state.opening = true; UI.lEmpty.setAttribute("value", "Opening..."); CARDS.forEach((c) => c.b.el.setAttribute("visible", false));
+  state.opening = true; UI.lEmpty.setAttribute("value", "Opening..."); CARDS.forEach((c) => { c.on = false; c.b.el.object3D.visible = false; });
   getJSON(GEMINI + "/events/" + encodeURIComponent(it.ticker), 45000).then((e) => {
     state.opening = false;
     const m = toMarket(e && e.data && !e.ticker ? e.data : e);
@@ -2059,13 +2474,19 @@ function stepPulse(now) {
   if (UI.graph && inMarket()) UI.graph.pulse(now);
   const v = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(now / 260));
   if (inMarket()) setTextOpacity(UI.when, UI.whenLive ? v : 1);
-  else CARDS.forEach((card) => setTextOpacity(card.foot, card.livePulse ? v : 1));
+  else {
+    CARDS.forEach((card) => setTextOpacity(card.stat, card.livePulse ? v : 1));
+    if (UI.feat) {
+      setTextOpacity(UI.feat.status, UI.feat.livePulse ? v : 1); setTextOpacity(UI.feat.clock, UI.feat.clockLive ? v : 1);
+      if (UI.feat.on) UI.feat.graph.pulse(now);
+    }
+  }
 }
 
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => grokTouch(i, j), handPose: (s, j, q) => handPose(s, j, q),
+  state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); stepHands(now); },
@@ -2664,6 +3085,11 @@ async function handleClip(blob) {
   if (S.grokDebug && AI.mode !== "sleep") aiNote("Heard: " + heard + "  [" + AI.mode + "]");
   if (AI.mode === "sleep" || AI.mode === "speaking") return;
   if (AI.pending) return aiSpeak(aiConfirm(heard), "awake");
+  if (AI.searchNext && performance.now() - AI.searchNext < 30000) {
+    AI.searchNext = 0;
+    const words = heard.replace(WAKE, "").replace(/^\W*(search( for)?|find|look( for)?|show me)\s+/i, "").replace(/[.?!]+$/, "").trim();
+    if (words) { doSearch(words); return aiSpeak("Searching for " + words + ".", "awake"); }
+  }
   const m = heard.match(WAKE);
   const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "");
   if (q.split(/\s+/).filter(Boolean).length) aiAnswer(q);
@@ -2786,12 +3212,13 @@ function aiContext() {
   } else if (state.activity) {
     L.push("The Activity tab is open, showing " + state.activity + ".");
   } else {
-    L.push("Lobby. Category tab: " + state.cat + ". Tabs: " + state.cats.join(", ") + ".");
+    L.push("Lobby. " + (state.searchQ ? "Search results for: " + state.searchQ : "Category tab: " + state.cat) + ". Tabs: " + barCats().join(", ") + ".");
     visibleMarkets().forEach((m, i) => L.push(`Market ${i}: ${m.title}: ` + m.opts.slice(0, 2).map((o) => o.name + " " + pct(o.price)).join(", ")));
   }
   L.push("Actions you may use (only when the user clearly asks):");
   L.push('{"type":"open","name":"<words from the market title, e.g. a team or coin>"} or {"type":"open","index":<Market number>} to open a market');
   L.push('{"type":"category","name":"<tab name>"} to switch tab; {"type":"back"} to go back to the list');
+  L.push('{"type":"search","words":"<what to look for>"} to search all open markets');
   L.push('{"type":"activity","tab":"positions" | "orders" | "history"} to show the user\'s activity');
   L.push('{"type":"simulate"} to simulate the odds (test money only)');
   if (inMarket()) {
@@ -2812,7 +3239,7 @@ function aiFindCat(name) {
   const clean2 = (s) => String(s || "").toLowerCase().replace(/\b(the|tab|tabs|section|category|markets?|page|please|open|show|go to)\b/g, " ").replace(/[^a-z0-9/ ]/g, " ").replace(/\s+/g, " ").trim();
   const want = clean2(name), stem = (s) => s.replace(/(ies|es|s)$/, "");
   if (!want) return null;
-  const cats = state.cats || [];
+  const cats = barCats();
   return cats.find((c) => clean2(c) === want) || cats.find((c) => stem(clean2(c)) === stem(want)) ||
          cats.find((c) => clean2(c).includes(want) || want.includes(clean2(c))) || null;
 }
@@ -2826,13 +3253,14 @@ function aiDo(a) {
     const n = aiFindCat(a.name);
     if (!n) return "I couldn't find that tab.";
     if (inMarket()) backToLobby();
-    state.activity = ""; selectCat(n); return "";
+    state.activity = ""; state.searchQ = ""; selectCat(n); return "";
   }
   if (a.type === "activity") {
     if (inMarket()) backToLobby();
     state.activity = ["positions", "orders", "history"].includes(a.tab) ? a.tab : "positions";
-    state.page = 0; actLoad(); refresh(); return "";
+    state.scroll = 0; actLoad(); refresh(); return "";
   }
+  if (a.type === "search") { doSearch(a.words || a.name || ""); return ""; }
   if (a.type === "simulate") { if (inMarket() && !LIVE.on && !state.sim) toggleSim(); return ""; }
   if (a.type === "open") return aiOpen(a), "";
   if (a.type === "order") return aiOrder(a);
