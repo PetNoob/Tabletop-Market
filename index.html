@@ -1800,7 +1800,7 @@ function openMarketInner(m) {
   state.lockUntil = performance.now() + 1900;           // no presses while the market is still arriving
   UI.arriving = true; setTimeout(() => { UI.arriving = false; }, 1900);
   UI.graph.reveal();
-  growIntoBoard(UI.fromCard, () => { if (inMarket() && state.market === m) courtShow(sportKind(m), teamColors(m)); });   // a floor (in the teams' colors) and a ball for each sport
+  growIntoBoard(UI.fromCard, () => { if (inMarket() && state.market === m) courtShow(boardKind(m), teamColors(m), cryptoCoin(m)); });   // a sport's floor and ball, or the crypto vault
   UI.fromCard = null;
   last.game = Date.now(); pollOptions(viewOptions(), m);
 }
@@ -1868,7 +1868,7 @@ function shrinkIntoCard(ticker) {
 }
 // the court draws itself out from the center circle and the hoops rise; going away, it all pulls back in
 // the floor draws out from the center line (and the hoops rise, for basketball); going away it all pulls back in
-function courtShow(kind, cols) {
+function courtShow(kind, cols, coin) {
   kind = kind || "";
   const was = state.courtOn || "";
   if (was === kind) return;
@@ -1880,19 +1880,19 @@ function courtShow(kind, cols) {
     rims.forEach((r) => { if (r.material && r.material.emissive) { r.material.emissive.copy(r.material.color); r.material.emissiveIntensity = glow; } });
   };
   if (!kind) {
-    ballShow("");
+    ballShow(""); vaultShow("");
     tween("court", 380, (k) => { const a = 1 - easeOut(k); FLOOR.u.value = a; if (was === "basketball") setHoops(a, 0); },
           () => { FLOOR.mesh.visible = false; UI.hoops.setAttribute("visible", false); });
     return;
   }
-  FLOOR.mat.map = floorTex(kind, cols);
+  FLOOR.mat.map = floorTex(kind, kind === "crypto" ? null : cols);
   FLOOR.u.value = 0; FLOOR.mesh.visible = true;
   UI.hoops.setAttribute("visible", kind === "basketball");
   if (kind === "basketball") setHoops(0.0001, 0);
   tween("court", 900, (k) => {
     FLOOR.u.value = easeOut(span(k, 0.05, 0.65));
     if (kind === "basketball") setHoops(easeBack(span(k, 0.45, 1)), 1.2 * Math.sin(Math.PI * span(k, 0.7, 1)));
-  }, () => ballShow(kind));
+  }, () => (kind === "crypto" ? vaultShow(coin) : ballShow(kind)));
 }
 function backToLobby() {
   grabReset();
@@ -3061,7 +3061,7 @@ function floorTex(kind, cols) {
   if (keys.length >= 6) { FLOOR.tex[keys[0]].dispose(); delete FLOOR.tex[keys[0]]; }
   const cv = document.createElement("canvas"); cv.width = FW; cv.height = FH;
   const g = cv.getContext("2d"), rnd = seeded(kind.length * 977 + 13);
-  ({ basketball: paintHardwood, soccer: paintPitch, hockey: paintRink, football: paintGridiron, baseball: paintDiamond }[kind] || paintHardwood)(g, rnd, cols);
+  ({ basketball: paintHardwood, soccer: paintPitch, hockey: paintRink, football: paintGridiron, baseball: paintDiamond, crypto: paintVaultFloor }[kind] || paintHardwood)(g, rnd, cols);
   const tx = new THREE.CanvasTexture(cv);
   tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8;
   return (FLOOR.tex[key] = tx);
@@ -3381,15 +3381,246 @@ function stepBall(now) {
   B.el.object3D.position.copy(B.p);
 }
 
+/* ---------- crypto markets: a vault full of coins ----------
+   The board is split down the middle (YES on the left, NO on the right, like the pills). In the center stands a
+   steel vault with its door slightly open and a glowing heap of that market's coin inside (Bitcoin, Ether, Solana...).
+   The vault never runs out: whenever the table is shaken (dragged, swung while following, brushed, or the vault
+   poked) coins spill out of the door, tumble, bounce, slide and settle flat, slosh when the table moves, bounce off
+   the board's edges and the vault, and can be flicked with your fingers. Only the newest 160 coins stay on the
+   board; older ones are recycled into new ones, so it never slows down. */
+const VAULT = { el: null, on: false, coin: "", W: 0.09, H: 0.08, D: 0.07, Z: -0.035, coins: [], inst: null, heap: null,
+                faceMats: {}, lastShake: 0, spillDebt: 0, last: 0, hands: [], scale: 0 };
+const COIN_R = 0.0075, COIN_H = 0.0019, COIN_CAP = 160;
+// which coin a market is about (from its title, subcategory and tags)
+function cryptoCoin(m) {
+  if (!m || (m.category || "").toLowerCase() !== "crypto") return "";
+  const s = ((m.title || "") + " " + (m.sub || "") + " " + (m.tags || "")).toLowerCase();
+  if (/bitcoin|\bbtc\b/.test(s)) return "btc";
+  if (/ethereum|\beth\b|\bether\b/.test(s)) return "eth";
+  if (/solana|\bsol\b/.test(s)) return "sol";
+  if (/\bxrp\b|ripple/.test(s)) return "xrp";
+  if (/doge/.test(s)) return "doge";
+  if (/zcash|\bzec\b/.test(s)) return "zec";
+  return "coin";
+}
+// the board a market gets: a sport's floor, the crypto vault, or nothing
+const boardKind = (m) => sportKind(m) || (cryptoCoin(m) ? "crypto" : "");
+
+/* ---------- the crypto floor: brushed dark metal, split in two, YES and NO ---------- */
+function paintVaultFloor(g, rnd) {
+  g.fillStyle = "#171a1f"; g.fillRect(0, 0, FW, FH);
+  g.globalAlpha = 0.07;                                                                 // brushed metal
+  for (let k = 0; k < 2600; k++) { g.fillStyle = rnd() < 0.5 ? "#000" : "#9aa3ad"; g.fillRect(rnd() * FW, rnd() * FH, 30 + rnd() * 90, 1); }
+  g.globalAlpha = 1;
+  const half = (x0, col) => { const gr = g.createLinearGradient(x0, 0, x0 + FW / 2, 0); gr.addColorStop(0, col); gr.addColorStop(1, "rgba(0,0,0,0)"); return gr; };
+  g.fillStyle = half(0, "rgba(47,191,113,0.16)"); g.fillRect(0, 0, FW / 2, FH);         // the YES half glows faintly green
+  g.save(); g.translate(FW, 0); g.scale(-1, 1); g.fillStyle = half(0, "rgba(229,72,77,0.16)"); g.fillRect(0, 0, FW / 2, FH); g.restore();
+  g.strokeStyle = "rgba(255,255,255,0.05)"; g.lineWidth = 1;                             // a faint grid
+  for (let x = 0; x <= FW; x += FW / 16) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, FH); g.stroke(); }
+  for (let y = 0; y <= FH; y += FH / 9) { g.beginPath(); g.moveTo(0, y); g.lineTo(FW, y); g.stroke(); }
+  g.font = "bold 120px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+  g.fillStyle = "rgba(47,191,113,0.16)"; g.fillText("YES", FW * 0.2, FH / 2);
+  g.fillStyle = "rgba(229,72,77,0.16)"; g.fillText("NO", FW * 0.8, FH / 2);
+  g.fillStyle = "#ff8c32"; g.fillRect(FW / 2 - 3, 18, 6, FH - 36);                        // the line splitting the board
+  g.shadowColor = "#ff8c32"; g.shadowBlur = 18; g.fillRect(FW / 2 - 1, 18, 2, FH - 36); g.shadowBlur = 0;
+  g.lineWidth = 3; g.strokeStyle = "rgba(255,255,255,0.35)"; g.strokeRect(18, 18, FW - 36, FH - 36);
+}
+
+/* ---------- coin faces, drawn in code ---------- */
+const COIN_LOOK = { btc: ["#f7931a", "#ffb04a"], eth: ["#627eea", "#a9b8f5"], sol: ["#16141c", "#9945ff"], xrp: ["#23292f", "#c9d1d9"],
+                    doge: ["#c2a633", "#e5cf6a"], zec: ["#f4b728", "#ffd36b"], coin: ["#c9a227", "#f0d16b"] };
+function coinFaceTex(kind) {
+  const S = 256, cv = document.createElement("canvas"); cv.width = cv.height = S;
+  const g = cv.getContext("2d"), [base, rimC] = COIN_LOOK[kind] || COIN_LOOK.coin, c = S / 2;
+  g.fillStyle = rimC; g.fillRect(0, 0, S, S);
+  const gr = g.createRadialGradient(c * 0.8, c * 0.7, 10, c, c, c);
+  gr.addColorStop(0, rimC); gr.addColorStop(0.55, base); gr.addColorStop(1, base);
+  g.fillStyle = gr; g.beginPath(); g.arc(c, c, c * 0.9, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = "rgba(255,255,255,0.5)"; g.lineWidth = 5; g.beginPath(); g.arc(c, c, c * 0.8, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = "#fff"; g.strokeStyle = "#fff";
+  if (kind === "btc") {
+    g.save(); g.translate(c, c); g.rotate(-0.24);
+    g.font = "bold 150px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("B", 6, 8);
+    g.fillRect(-14, -82, 10, 26); g.fillRect(8, -82, 10, 26); g.fillRect(-14, 64, 10, 26); g.fillRect(8, 64, 10, 26);
+    g.restore();
+  } else if (kind === "eth") {
+    const top = [[c, 40], [c + 52, c + 6], [c, c + 34], [c - 52, c + 6]], bot = [[c, c + 48], [c + 52, c + 18], [c, S - 36], [c - 52, c + 18]];
+    [top, bot].forEach((pts, i) => { g.globalAlpha = i ? 0.85 : 1; g.beginPath(); pts.forEach((p, j) => (j ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]))); g.closePath(); g.fill(); });
+    g.globalAlpha = 1;
+  } else if (kind === "sol") {
+    const lg = g.createLinearGradient(c - 70, c + 60, c + 70, c - 60); lg.addColorStop(0, "#9945ff"); lg.addColorStop(1, "#14f195");
+    g.fillStyle = lg;
+    [-46, 0, 46].forEach((dy, i) => {
+      const sk = i === 1 ? -18 : 18;
+      g.beginPath(); g.moveTo(c - 66 + sk, c + dy - 14); g.lineTo(c + 66 + sk, c + dy - 14); g.lineTo(c + 66 - sk, c + dy + 14); g.lineTo(c - 66 - sk, c + dy + 14); g.closePath(); g.fill();
+    });
+  } else {
+    const sym = { xrp: "X", doge: "D", zec: "Z" }[kind] || "$";
+    g.font = "bold 140px sans-serif"; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(sym, c, c + 8);
+  }
+  const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 4;
+  return tx;
+}
+function coinMats(kind) {
+  if (VAULT.faceMats[kind]) return VAULT.faceMats[kind];
+  const [base, rimC] = COIN_LOOK[kind] || COIN_LOOK.coin;
+  const edge = new THREE.MeshStandardMaterial({ color: kind === "sol" || kind === "xrp" ? "#8a8f98" : rimC, metalness: 0.85, roughness: 0.3 });
+  const face = new THREE.MeshStandardMaterial({ map: coinFaceTex(kind), metalness: 0.55, roughness: 0.35 });
+  return (VAULT.faceMats[kind] = [edge, face, face]);                                     // cylinder parts: side, top, bottom
+}
+
+/* ---------- the vault ---------- */
+function buildVault() {
+  const V = VAULT, W = V.W, H = V.H, D = V.D, t = 0.008;
+  V.el = mk("a-entity", {}, UI.game);
+  const root = V.root = new THREE.Group(); V.el.object3D.add(root);
+  root.position.set(0, FLOOR_Y + H / 2, V.Z); root.visible = false;
+  const steel = new THREE.MeshStandardMaterial({ color: 0x3b414a, metalness: 0.85, roughness: 0.32 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x0b0c0f, metalness: 0.2, roughness: 0.9 });
+  const box = (w, h, d, x, y, z, mat) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat || steel); b.position.set(x, y, z); root.add(b); return b; };
+  box(W, H, t, 0, 0, -D / 2 + t / 2);                                                      // back
+  box(t, H, D, -W / 2 + t / 2, 0, 0); box(t, H, D, W / 2 - t / 2, 0, 0);                    // sides
+  box(W, t, D, 0, H / 2 - t / 2, 0); box(W, t, D, 0, -H / 2 + t / 2, 0);                    // top and bottom
+  box(W - 2 * t, H - 2 * t, 0.002, 0, 0, -D / 2 + t + 0.001, dark);                         // dark inside
+  box(t * 1.6, H, 0.006, -W / 2 + t * 0.8, 0, D / 2); box(t * 1.6, H, 0.006, W / 2 - t * 0.8, 0, D / 2);   // front frame
+  box(W, t * 1.6, 0.006, 0, H / 2 - t * 0.8, D / 2); box(W, t * 1.6, 0.006, 0, -H / 2 + t * 0.8, D / 2);
+  // a warm glow from the coins inside
+  const glow = new THREE.Mesh(new THREE.PlaneGeometry(W * 0.7, H * 0.55),
+    new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending }));
+  glow.position.set(0, -H * 0.12, -D / 2 + t + 0.004); root.add(glow);
+  // the door, hinged on the left edge, swung open a little, with a wheel and bolts
+  const dw = W - 2 * t * 1.1, dh = H - 2 * t * 1.1, door = V.door = new THREE.Group();
+  door.position.set(-W / 2 + t, 0, D / 2 + 0.004); door.rotation.y = -0.62; root.add(door);
+  const slab2 = new THREE.Mesh(new THREE.BoxGeometry(dw, dh, 0.009), steel); slab2.position.x = dw / 2; door.add(slab2);
+  const brass = new THREE.MeshStandardMaterial({ color: 0xc9a227, metalness: 0.9, roughness: 0.25 });
+  const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.013, 0.0018, 8, 24), brass); wheel.position.set(dw / 2, 0, 0.0065); door.add(wheel);
+  [0, 1, 2].forEach((k) => { const sp = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.0016, 0.0016), brass); sp.position.copy(wheel.position); sp.rotation.z = k * Math.PI / 3; door.add(sp); });
+  [[-1, -1], [-1, 1], [1, -1], [1, 1]].forEach(([a, b]) => {
+    const bolt = new THREE.Mesh(new THREE.CylinderGeometry(0.0022, 0.0022, 0.003, 10), brass);
+    bolt.rotation.x = Math.PI / 2; bolt.position.set(dw / 2 + a * dw * 0.38, b * dh * 0.38, 0.006); door.add(bolt);
+  });
+  // a heap of coins inside (fixed), and the loose coins on the board (moving)
+  const geo = new THREE.CylinderGeometry(COIN_R, COIN_R, COIN_H, 24);
+  V.heap = new THREE.InstancedMesh(geo, coinMats("coin"), 34); root.add(V.heap);
+  const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), P = new THREE.Vector3(), Sc = new THREE.Vector3(1, 1, 1), rnd = seeded(5);
+  for (let i = 0; i < 34; i++) {
+    const layer = Math.floor(i / 12), a = rnd() * Math.PI * 2, r = rnd() * (0.026 - layer * 0.007);
+    P.set(Math.cos(a) * r, -H / 2 + t + COIN_H / 2 + layer * 0.004 + rnd() * 0.002, -0.004 + Math.sin(a) * r * 0.8);
+    Q.setFromEuler(E.set((rnd() - 0.5) * 0.7, rnd() * 6.3, (rnd() - 0.5) * 0.7));
+    V.heap.setMatrixAt(i, M.compose(P, Q, Sc));
+  }
+  V.inst = new THREE.InstancedMesh(geo, coinMats("coin"), COIN_CAP); V.inst.count = 0; V.inst.frustumCulled = false;
+  V.inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage); V.el.object3D.add(V.inst);
+}
+function vaultShow(coin) {
+  const V = VAULT;
+  if (!V.el) buildVault();
+  V.coins.length = 0; V.inst.count = 0; V.spillDebt = 0;
+  if (!coin) { V.on = false; V.root.visible = false; return; }
+  V.coin = coin; V.on = true;
+  V.heap.material = V.inst.material = coinMats(coin);
+  V.root.visible = true;
+  tween("vault", 520, (k) => { const s = Math.max(0.001, easeBack(k)); V.root.scale.setScalar(s); V.door.rotation.y = -0.62 * easeOut(k); },
+        () => { for (let i = 0; i < 14; i++) setTimeout(() => spillCoin(1.2), i * 45); });   // a small spill to show what it does
+}
+// one coin out of the door, toward you, with a bit of spin
+function spillCoin(power) {
+  const V = VAULT;
+  if (!V.on) return;
+  let c;
+  if (V.coins.length < COIN_CAP) { c = { p: new THREE.Vector3(), v: new THREE.Vector3(), q: new THREE.Quaternion(), w: new THREE.Vector3(), rest: false }; V.coins.push(c); }
+  else { c = V.coins.shift(); V.coins.push(c); c.rest = false; }                             // recycle the oldest
+  const p = power || 1;
+  c.p.set((Math.random() - 0.5) * V.W * 0.5, FLOOR_Y + 0.012 + Math.random() * 0.03, V.Z + V.D / 2 + COIN_R + 0.004);
+  c.v.set((Math.random() - 0.5) * 0.5 * p, (0.15 + Math.random() * 0.35) * p, (0.25 + Math.random() * 0.45) * p);
+  c.q.setFromEuler(new THREE.Euler(Math.random() * 6.3, Math.random() * 6.3, Math.random() * 6.3));
+  c.w.set((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30);
+}
+const cv1 = new THREE.Vector3(), cq1 = new THREE.Quaternion(), cq2 = new THREE.Quaternion(), cup = new THREE.Vector3(), cM = new THREE.Matrix4(), cS = new THREE.Vector3(1, 1, 1), YUP = new THREE.Vector3(0, 1, 0);
+function stepVault(now) {
+  const V = VAULT, dt0 = Math.min(0.05, Math.max(0.001, (now - (V.last || now)) / 1000));
+  V.last = now;
+  if (!V.on || !inMarket()) return;
+  // shaking spills coins: the harder the table is moved, the more come out
+  const shake = Math.hypot(phys.acc.x, phys.acc.z) + Math.abs(phys.acc.y) * 0.5;
+  if (shake > 1.1) { V.spillDebt += (shake - 1.1) * 7 * dt0; V.lastShake = now; }
+  while (V.spillDebt >= 1) { V.spillDebt -= 1; spillCoin(0.8 + Math.min(1.2, shake / 6)); }
+  const steps = Math.ceil(dt0 / 0.01), dt = dt0 / steps, fy = FLOOR_Y + COIN_H / 2;
+  const vx0 = -V.W / 2 - COIN_R, vx1 = V.W / 2 + COIN_R, vz0 = V.Z - V.D / 2 - COIN_R, vz1 = V.Z + V.D / 2 + COIN_R, vy1 = FLOOR_Y + V.H + COIN_R;
+  V.coins.forEach((c, i) => {
+    if (c.rest && shake > 1.4) { c.rest = false; c.v.y += 0.05 + Math.random() * 0.1; }   // a shake wakes resting coins
+    if (c.rest) return;
+    for (let s = 0; s < steps; s++) {
+      c.v.y += BALL_G * dt;
+      c.v.x -= phys.acc.x * dt * 0.6; c.v.z -= phys.acc.z * dt * 0.6;
+      c.p.addScaledVector(c.v, dt);
+      const ground = fy + (i % 7) * 0.00012;                                                 // tiny offsets so flat coins never flicker
+      if (c.p.y < ground) {
+        c.p.y = ground;
+        if (c.v.y < 0) c.v.y = -c.v.y * 0.32;
+        if (c.v.y < 0.05) c.v.y = 0;
+        const f = Math.max(0, 1 - dt * 3.2); c.v.x *= f; c.v.z *= f; c.w.multiplyScalar(Math.max(0, 1 - dt * 6));
+      }
+      if (Math.abs(c.p.x) > COURT_XB - COIN_R) { c.p.x = Math.sign(c.p.x) * (COURT_XB - COIN_R); c.v.x = -c.v.x * 0.5; }
+      if (Math.abs(c.p.z) > COURT_ZB - COIN_R) { c.p.z = Math.sign(c.p.z) * (COURT_ZB - COIN_R); c.v.z = -c.v.z * 0.5; }
+      if (c.p.x > vx0 && c.p.x < vx1 && c.p.z > vz0 && c.p.z < vz1 && c.p.y < vy1) {       // bounce off the vault
+        const pen = [c.p.x - vx0, vx1 - c.p.x, c.p.z - vz0, vz1 - c.p.z, vy1 - c.p.y], k = pen.indexOf(Math.min.apply(null, pen));
+        if (k === 0) { c.p.x = vx0; c.v.x = -Math.abs(c.v.x) * 0.4; } else if (k === 1) { c.p.x = vx1; c.v.x = Math.abs(c.v.x) * 0.4; }
+        else if (k === 2) { c.p.z = vz0; c.v.z = -Math.abs(c.v.z) * 0.4; } else if (k === 3) { c.p.z = vz1; c.v.z = Math.abs(c.v.z) * 0.4; }
+        else { c.p.y = vy1; c.v.y = Math.abs(c.v.y) * 0.3; }
+      }
+    }
+    // tumble in the air; on the floor, lie down flat (whichever face is nearer up)
+    const wl = c.w.length();
+    if (wl > 0.001) { cq1.setFromAxisAngle(cv1.copy(c.w).divideScalar(wl), wl * dt0); c.q.premultiply(cq1); }
+    if (c.p.y <= fy + 0.002) {
+      cup.copy(YUP).applyQuaternion(c.q);
+      cq2.setFromUnitVectors(cup, cup.y >= 0 ? YUP : cv1.set(0, -1, 0)).multiply(c.q);
+      c.q.slerp(cq2, Math.min(1, dt0 * 9));
+      if (c.v.lengthSq() < 0.0009 && wl < 0.5 && Math.abs(cup.y) > 0.995) { c.rest = true; c.v.set(0, 0, 0); c.w.set(0, 0, 0); }
+    }
+  });
+  V.coins.forEach((c, i) => V.inst.setMatrixAt(i, cM.compose(c.p, c.q, cS)));
+  V.inst.count = V.coins.length;
+  V.inst.instanceMatrix.needsUpdate = true;
+}
+// fingers: flick coins, and poking the vault shakes some loose
+function vaultTouch(i, joints) {
+  const V = VAULT;
+  if (!V.on || !joints || !inMarket()) return;
+  const mkt = document.getElementById("market").object3D, now = performance.now();
+  const mem = V.hands[i] || (V.hands[i] = { prev: {}, t: now, poke: 0 });
+  const dt = (now - mem.t) / 1000;
+  for (const k of GRAB_PTS) {
+    const lp = mkt.worldToLocal(cv1.copy(joints[k]));
+    const prev = mem.prev[k] || (mem.prev[k] = lp.clone());
+    const vx = dt > 0 && dt < 0.1 ? (lp.x - prev.x) / dt : 0, vy = dt > 0 && dt < 0.1 ? (lp.y - prev.y) / dt : 0, vz = dt > 0 && dt < 0.1 ? (lp.z - prev.z) / dt : 0;
+    for (const c of V.coins) {
+      const dx = c.p.x - lp.x, dy = c.p.y - lp.y, dz = c.p.z - lp.z, d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > 0.0004) continue;                                                             // within 2 cm
+      const d = Math.sqrt(d2) || 0.001;
+      c.v.set(vx * 0.9 + dx / d * 0.3, Math.max(0.1, vy * 0.6 + 0.15), vz * 0.9 + dz / d * 0.3);
+      c.w.set((Math.random() - 0.5) * 25, (Math.random() - 0.5) * 25, (Math.random() - 0.5) * 25);
+      c.rest = false;
+    }
+    if (Math.abs(lp.x) < V.W / 2 + 0.01 && lp.y < FLOOR_Y + V.H + 0.01 && lp.z > V.Z - V.D / 2 - 0.01 && lp.z < V.Z + V.D / 2 + 0.01 && now > mem.poke) {
+      mem.poke = now + 250;
+      for (let n = 0; n < 4; n++) spillCoin(1.1);                                            // a poke at the vault knocks a few out
+    }
+    prev.copy(lp);
+  }
+  mem.t = now;
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
+  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); vaultTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => {
     [["follow", stepFollow], ["physics", stepPhysics], ["grab", stepGrab], ["anims", stepAnims], ["piles", (n) => PILES.forEach((p) => p.update(n))],
-     ["pulse", stepPulse], ["grok", stepOrb], ["hands", stepHands], ["ball", stepBall]].forEach(([tag, f]) => { try { f(now); } catch (e) { reportErr(tag, e); } });
+     ["pulse", stepPulse], ["grok", stepOrb], ["hands", stepHands], ["ball", stepBall], ["vault", stepVault]].forEach(([tag, f]) => { try { f(now); } catch (e) { reportErr(tag, e); } });
   },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
