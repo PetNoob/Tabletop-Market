@@ -288,3 +288,10 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Gemini events carry `volume` (now `m.volume`); contracts keep `abbr` and `side`. Reloads keep price history (`o.hist`) by symbol.
 - Grok: new action {"type":"search","words":...}; tabs list uses barCats().
 
+## Market board redesign, Nov 17 (UNTESTED; scripts parse cleanly)
+- Brian pasted a detail-view prompt with a Gemini game page screenshot. Agreed: keep the table, court, pills and cash piles; restyle only the upright board. Skip watchlist, share and Stats. The category bar stays hidden in the market view (no room under the board). Cyan/pink in the screenshot are team colors, so charts use each team's own color; the lobby featured card now also uses team colors for games (cyan/yellow only for answer lists).
+- Board is now the lobby panel size (LW x LH; the grow/shrink stand-in too). Header: "< Back" button, picture, title, odds status. A live line between two thin rules (ESPN period and clock, else start/close time). Games: big score between the two team pictures with codes under them ("vs" when ESPN has no score). Answer lists: the answer rows (with paging) on the left, chart on the right.
+- `makeLineChart`: thin lines, no fill, bottom axis with 5 time labels, dot plus pulsing ring at each end, big name and percent labels beside the ends, pushed apart when closer than 4.2 cm and kept inside the chart. `UI.wide` (games) and `UI.narrow` (lists); `UI.graph` is a small proxy for reveal/pulse.
+- Ranges (`m.range`, kept while data updates): Live = /v2/candles/{sym}/1m since game start (or last hour, labeled "1H" when not live), 1D = 15m (the old history), All = 1hr, falling back to 15m when fewer than 6 points. Gemini only has candles where trades happened (6hr and 1day returned NoDataFound for a game). New prices are appended to all loaded ranges.
+- Footer: event date with time zone ("Nov 17 @ 9:30pm CST", or "Closes ..."), volume, "score: ESPN" when shown; Live/1D/All with the active one as a gray pill (hidden during simulation).
+

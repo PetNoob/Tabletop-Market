@@ -981,7 +981,7 @@ function build() {
   UI.hoops.object3D.scale.setScalar(COURT_SCALE);
   // a plain panel used only during the move between the list and a market: it grows from the card you pressed
   UI.ghostAt = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
-  UI.ghost = slab(UI.ghostAt, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE, order: 7, pos: "0 0 0.012" });
+  UI.ghost = slab(UI.ghostAt, LW, LH, 0.008, PANEL_BG, { r: 0.028, opacity: SEE, order: 7, pos: "0 0 0.012" });
   UI.ghost.setAttribute("visible", false);
   buildOrb(market);
 
@@ -1452,20 +1452,164 @@ function featFoot(m) {
   return parts.join("    ");
 }
 
+/* ---------- the market board's chart: thin lines, no fill, a dot and ring at each line's end,
+   and big labels (team and percent) beside the ends, pushed apart when they are close ---------- */
+function makeLineChart(parent, x, y, w, h) {
+  const holder = mk("a-entity", { position: `${x} ${y} 0.005` }, parent);
+  const g = new THREE.Group(); g.position.z = 0.001; holder.object3D.add(g);
+  const LBL = 0.09, x0 = -w / 2 + 0.005, x1 = w / 2 - LBL, y0 = -h / 2 + 0.024, y1 = h / 2 - 0.016, MAXP = 220, TH = 0.0019;
+  const axis = new THREE.Mesh(new THREE.PlaneGeometry(x1 - x0, 0.0007),
+                              new THREE.MeshBasicMaterial({ color: 0x3a4049, transparent: true, opacity: 0.9, depthWrite: false }));
+  axis.position.set((x0 + x1) / 2, y0, 0); axis.renderOrder = 2; g.add(axis);
+  const ticks = [0, 1, 2, 3, 4].map((k) => label(holder, "", x0 + (x1 - x0) * k / 4, y0 - 0.012, 0.002, 0.0056, C.dim, k === 0 ? "left" : k === 4 ? "right" : "center"));
+  const cap = label(holder, "", x0, y1 + 0.006, 0.002, 0.0058, C.dim, "left");
+  const lines = [0, 1].map(() => {
+    const pos = new Float32Array((MAXP - 1) * 18), geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat); mesh.frustumCulled = false; mesh.renderOrder = 4; g.add(mesh);
+    const dot = new THREE.Mesh(new THREE.CircleGeometry(0.0032, 20), mat); dot.position.z = 0.0012; dot.renderOrder = 6; g.add(dot);
+    const rmat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8, depthWrite: false });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.0062, 0.0074, 28), rmat); ring.position.z = 0.0012; ring.renderOrder = 6; g.add(ring);
+    const name = label(holder, "", x1 + 0.014, 0, 0.003, 0.0108, C.text, "left");
+    const val = label(holder, "", x1 + 0.014, 0, 0.003, 0.0128, C.text, "left");
+    return { pos, geo, mat, mesh, dot, ring, rmat, name, val, n: 0 };
+  });
+  const clock = (ms) => clean(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: false }));
+  const day = (ms) => clean(new Date(ms).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
+  let revealT0 = 0, revealPending = false;
+  const hideLine = (L) => { L.mesh.visible = L.dot.visible = L.ring.visible = false; L.name.setAttribute("value", ""); L.val.setAttribute("value", ""); };
+  return {
+    show: function (on) { holder.object3D.visible = on; },
+    reveal: function () { revealPending = true; revealT0 = 0; },
+    pulse: function (now) {
+      if (!holder.object3D.visible) return;
+      const rk = revealT0 ? clamp((now - revealT0) / 750, 0, 1) : 1, k = (now % 1600) / 1600;
+      lines.forEach((L) => {
+        if (!L.mesh.visible) return;
+        if (rk < 1) { L.geo.setDrawRange(0, Math.max(1, Math.floor(L.n * easeOut(rk))) * 6); L.dot.visible = L.ring.visible = false; return; }
+        if (revealT0) { L.geo.setDrawRange(0, L.n * 6); L.dot.visible = L.ring.visible = true; }
+        L.ring.scale.setScalar(1 + 0.5 * k); L.rmat.opacity = 0.85 * (1 - k);      // a soft ring pulsing out of the newest point
+      });
+      if (rk >= 1) revealT0 = 0;
+    },
+    // series = [{ color, pts: [{t, p}], name, value }], at most two. dates = true to label the time axis with days
+    set: function (series, caption, dates) {
+      cap.setAttribute("value", caption || "");
+      const all = [].concat.apply([], series.map((s) => s.pts));
+      if (all.length < 1) { lines.forEach(hideLine); ticks.forEach((t) => t.setAttribute("value", "")); return; }
+      let pMin = Math.min.apply(null, all.map((q) => q.p)), pMax = Math.max.apply(null, all.map((q) => q.p));
+      const span = Math.max(pMax - pMin, 0.1) + 0.06, c = (pMin + pMax) / 2;
+      pMin = Math.max(0, c - span / 2); pMax = Math.min(1, pMin + span); pMin = Math.max(0, pMax - span);
+      const tMin = Math.min.apply(null, all.map((q) => q.t)), tMax = Math.max.apply(null, all.map((q) => q.t));
+      const longSpan = dates || tMax - tMin > 2 * 86400000;
+      ticks.forEach((t, k) => t.setAttribute("value", tMax - tMin > 60000 ? (longSpan ? day : clock)(tMin + (tMax - tMin) * k / 4) : ""));
+      const X = (q) => (tMax > tMin ? x0 + (x1 - x0) * (q.t - tMin) / (tMax - tMin) : x1);
+      const Y = (q) => y0 + (y1 - y0) * (q.p - pMin) / (pMax - pMin);
+      const ends = [];
+      lines.forEach((L, i) => {
+        const s = series[i];
+        if (!s || !s.pts.length) { hideLine(L); return; }
+        let pts = s.pts;
+        if (pts.length > MAXP) { const k = pts.length / MAXP; pts = Array.from({ length: MAXP }, (_, j) => s.pts[Math.min(s.pts.length - 1, Math.round((j + 1) * k) - 1)]); }
+        if (pts.length === 1) pts = [{ t: tMin - 1, p: pts[0].p }, pts[0]];
+        let n = 0;
+        for (let j = 0; j < pts.length - 1; j++) {
+          const ax = j === 0 && tMax === tMin ? x0 : X(pts[j]), ay = Y(pts[j]), bx = X(pts[j + 1]), by = Y(pts[j + 1]);
+          const len = Math.hypot(bx - ax, by - ay) || 1e-6, nx = -(by - ay) / len * TH / 2, ny = (bx - ax) / len * TH / 2;
+          L.pos.set([ax + nx, ay + ny, 0, ax - nx, ay - ny, 0, bx + nx, by + ny, 0, bx + nx, by + ny, 0, ax - nx, ay - ny, 0, bx - nx, by - ny, 0], n * 18);
+          n++;
+        }
+        L.geo.attributes.position.needsUpdate = true; L.geo.setDrawRange(0, n * 6); L.n = n;
+        L.mat.color.set(s.color); L.rmat.color.set(s.color);
+        const end = pts[pts.length - 1];
+        L.dot.position.set(X(end), Y(end), 0.0012); L.ring.position.copy(L.dot.position);
+        L.mesh.visible = L.dot.visible = L.ring.visible = true;
+        L.name.setAttribute("value", s.name || ""); L.name.setAttribute("color", s.color);
+        L.val.setAttribute("value", s.value || ""); L.val.setAttribute("color", s.color);
+        ends.push({ L, y: Y(end) });
+        if (revealPending && n > 0) { revealT0 = performance.now(); revealPending = false; }
+      });
+      // labels beside the line ends: a name over a percent; never overlapping, never past the chart's top or bottom
+      const GAPY = 0.042, lo = y0 + 0.02, hi = y1 - 0.004;
+      ends.sort((a, b) => b.y - a.y);
+      if (ends.length === 2 && ends[0].y - ends[1].y < GAPY) { const mid = (ends[0].y + ends[1].y) / 2; ends[0].y = mid + GAPY / 2; ends[1].y = mid - GAPY / 2; }
+      ends.forEach((e) => { e.y = clamp(e.y, lo, hi); });
+      if (ends.length === 2 && ends[0].y - ends[1].y < GAPY) { if (ends[0].y >= hi) ends[1].y = ends[0].y - GAPY; else ends[0].y = ends[1].y + GAPY; }
+      ends.forEach((e) => { e.L.name.object3D.position.y = e.y + 0.009; e.L.val.object3D.position.y = e.y - 0.010; });
+    }
+  };
+}
+// chart ranges on the market board. Gemini keeps history only where trades happened:
+//   Live = 1-minute steps (since the game started, or the last hour), 1D = 15-minute steps, All = 1-hour steps
+//   (if those are too few, the 15-minute history is shown instead)
+function rangeOf(m) { return m.range || (m.sport && m.live ? "live" : "day"); }
+function setRange(id) {
+  const m = state.market;
+  if (!m || state.sim) return;
+  m.range = id;
+  graphOptions().forEach((o) => loadRange(o, id));
+  UI.graph.reveal(); refresh();
+}
+async function loadRange(o, id) {
+  if (id === "day") return loadHist(o);
+  if (!o || !o.sym) return;
+  o.hr = o.hr || {};
+  if (o.hr[id]) return;
+  const h = o.hr[id] = { pts: [], loaded: false };
+  try {
+    const j = await getJSON(GEMINI_CANDLES + encodeURIComponent(o.sym) + "/" + (id === "live" ? "1m" : "1hr"), 12000);
+    h.pts = (Array.isArray(j) ? j : []).map((c) => ({ t: +c[0], p: +c[4] })).filter((q) => q.t > 0 && q.p > 0 && q.p <= 1).sort((a, b) => a.t - b.t);
+  } catch (err) { h.failed = true; }                 // Gemini says "no data" when nothing traded in that step size
+  h.pts.push({ t: Date.now(), p: o.price });
+  h.loaded = true;
+  refresh();
+}
+// the points to draw for one answer in the chosen range; null while still loading
+function rangePts(m, o) {
+  if (state.sim) {                                    // simulating: only the simulated stretch (plus the last real point)
+    if (!o.hist || !o.hist.loaded) return [];
+    return o.hist.pts.filter((q) => !q.sim).slice(-1).concat(o.hist.pts.filter((q) => q.sim));
+  }
+  const r = rangeOf(m), day = o.hist && o.hist.loaded ? o.hist.pts : null;
+  if (r === "day") return day;
+  const h = o.hr && o.hr[r];
+  if (!h || !h.loaded) return null;
+  if (r === "live") {
+    const from = m.sport && m.live && m.start ? m.start.getTime() - 600000 : Date.now() - 3600000;
+    const p = h.pts.filter((q) => q.t >= from);
+    return p.length >= 2 ? p : h.pts.slice(-60);
+  }
+  return h.pts.length >= 6 ? h.pts : day || h.pts;
+}
+function dateTZ(d) {
+  return clean(d.toLocaleDateString("en-US", { month: "short", day: "numeric" })) + " @ " +
+         clean(d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZoneName: "short" })).toLowerCase().replace(/ ([a-z]+t)$/, (s) => s.toUpperCase());
+}
+
 /* ---------- market view ---------- */
 function buildMarket(market) {
   const G = UI.game = mk("a-entity", { visible: false }, market);
 
-  // board at the back: title, answers on the left, graph on the right
+  // board at the back, the same size as the lobby panel:
+  // header (back, picture, title), live line between two rules, scoreboard (games), wide chart, footer with chart ranges
   const B = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, G);
-  slab(B, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE });
-  UI.titleIcon = iconMesh(B, 0.036, -0.29, 0.177, 0.0065);
-  UI.title = label(B, "", -0.308, 0.195, 0.006, 0.0092, C.text, "left", 0.616, "top");
-  UI.when = label(B, "", -0.308, 0.128, 0.006, 0.0066, C.dim, "left");
-  UI.status = label(B, "", 0.308, 0.128, 0.006, 0.0066, C.dim, "right");
+  slab(B, LW, LH, 0.008, PANEL_BG, { r: 0.028, opacity: 0.97 });
+  UI.boardBack = button(B, "< Back", -0.322, 0.205, 0.07, 0.032, backToLobby,
+                        { size: 0.0064, r: 0.016, color: FIELD, enabled: () => inMarket() && !UI.trans });
+  UI.titleIcon = iconMesh(B, 0.036, -0.262, 0.205, 0.0065);
+  UI.title = label(B, "", -0.238, 0.205, 0.006, 0.0118, C.text, "left");
+  UI.status = label(B, "", 0.355, 0.205, 0.006, 0.0056, C.dim, "right");
+  UI.when = label(B, "", 0, 0.158, 0.006, 0.0072, C.dim);
+  UI.rules = [0, 1].map(() => slab(B, 0.1, 0.0012, 0.001, EDGE, { r: 0.0005, order: 1, opacity: 1, pos: "0 0.158 0.0045" }));
+  UI.sb = mk("a-entity", {}, B);
+  UI.sbIcons = [-1, 1].map((d) => iconMesh(UI.sb, 0.05, d * 0.105, 0.114, 0.0065));
+  UI.sbAbbr = [-1, 1].map((d) => label(UI.sb, "", d * 0.105, 0.077, 0.006, 0.0078, C.text));
+  UI.sbScore = label(UI.sb, "", 0, 0.112, 0.006, 0.026, C.text);
+  // answers (markets with a list of answers only): select one, then pick Yes or No with the pills
   for (let i = 0; i < 4; i++) {
     const row = { i };
-    const b = row.b = button(B, "", -0.165, 0.076 - i * 0.056, 0.29, 0.05, () => pressRow(row.i),
+    const b = row.b = button(B, "", -0.2, 0.11 - i * 0.056, 0.29, 0.05, () => pressRow(row.i),
                              { r: 0.012, enabled: () => inMarket() && !!rowOption(row.i) && state.market.kind !== "duel" });
     row.chip = slab(b.el, 0.005, 0.03, 0.002, C.line, { r: 0.0025, order: 2, pos: `-0.134 0 ${b.tz}` });
     row.icon = iconMesh(b.el, 0.026, -0.112, 0, b.tz);
@@ -1474,12 +1618,23 @@ function buildMarket(market) {
     row.pct = tickerLabel(b.el, 0.134, 0, b.tz, 0.012, C.text, "right");
     ROWS.push(row);
   }
-  UI.rPage = label(B, "", -0.23, -0.176, 0.006, 0.0062, C.dim);
-  UI.rPrev = button(B, "<", -0.105, -0.176, 0.05, 0.028, () => { state.market.rowPage--; rowsTurned(); },
-                    { enabled: () => inMarket() && state.market.rowPage > 0 });
-  UI.rNext = button(B, ">", -0.048, -0.176, 0.05, 0.028, () => { state.market.rowPage++; rowsTurned(); },
-                    { enabled: () => inMarket() && state.market.rowPage < rowPages(state.market) - 1 });
-  UI.graph = makeGraph(B, 0.158, -0.043, 0.30, 0.292);
+  UI.rPage = label(B, "", -0.275, -0.11, 0.006, 0.0062, C.dim);
+  UI.rPrev = button(B, "<", -0.14, -0.11, 0.05, 0.028, () => { state.market.rowPage--; rowsTurned(); },
+                    { enabled: () => inMarket() && state.market.kind !== "duel" && state.market.rowPage > 0 });
+  UI.rNext = button(B, ">", -0.083, -0.11, 0.05, 0.028, () => { state.market.rowPage++; rowsTurned(); },
+                    { enabled: () => inMarket() && state.market.kind !== "duel" && state.market.rowPage < rowPages(state.market) - 1 });
+  // footer: date and volume on the left, chart ranges on the right
+  UI.bDate = label(B, "", -0.355, -0.198, 0.006, 0.0062, C.dim, "left");
+  UI.bVol = label(B, "", -0.355, -0.218, 0.006, 0.0062, C.dim, "left");
+  UI.ranges = [["live", "Live"], ["day", "1D"], ["all", "All"]].map(([id, nm], i) => {
+    const b = button(B, nm, 0.215 + i * 0.058, -0.207, 0.052, 0.028, () => setRange(id),
+                     { size: 0.0064, r: 0.014, color: PANEL_BG, opacity: 1, enabled: () => inMarket() && !state.sim });
+    b.id = id;
+    return b;
+  });
+  UI.wide = makeLineChart(B, 0, -0.06, 0.71, 0.22);        // games: the full width
+  UI.narrow = makeLineChart(B, 0.165, -0.0175, 0.38, 0.295);   // answer lists: beside the answers
+  UI.graph = { reveal: () => { UI.wide.reveal(); UI.narrow.reveal(); }, pulse: (now) => { UI.wide.pulse(now); UI.narrow.pulse(now); } };
 
   // hoops (basketball only) and one cash pile per side
   UI.hoops = mk("a-entity", { visible: false }, G);
@@ -1613,7 +1768,7 @@ function growIntoBoard(card, after) {
 function tileGeom(card) {
   if (!card || !card.b) return null;
   const p = UI.lobby.object3D.worldToLocal(card.b.el.object3D.getWorldPosition(new THREE.Vector3()));
-  return { x: p.x, y: p.y, sx: card.w / 0.66, sy: card.h / 0.42 };
+  return { x: p.x, y: p.y, sx: card.w / LW, sy: card.h / LH };
 }
 function growCard(card) {
   const g = UI.ghost, o = g.object3D, mat = g.getObject3D("mesh").material;
@@ -1931,6 +2086,7 @@ async function pollOptions(opts, m) {
       if (p === null || (state.sim && m && m === state.market)) return;
       o.price = clamp(p, 0.01, 0.99); changed = true;
       if (o.hist && o.hist.loaded) { o.hist.pts.push({ t: Date.now(), p: o.price }); if (o.hist.pts.length > 600) o.hist.pts.shift(); }
+      ["live", "all"].forEach((r) => { const h = o.hr && o.hr[r]; if (h && h.loaded) { h.pts.push({ t: Date.now(), p: o.price }); if (h.pts.length > 2000) h.pts.shift(); } });
     }).catch((err) => { if (/ 404/.test(String(err))) o.dead = true; })));   // no live price for this answer: stop asking
   if (changed) refresh();
 }
@@ -2075,9 +2231,11 @@ function fillFeatured(m) {
   F.status.setAttribute("color", live ? C.red : C.dim);
   F.livePulse = live;
   const two = m.opts.slice(0, 2);
+  const cols = two.map((o, k) => (m.kind === "duel" && o.color ? o.color : k ? YE : CY));
   F.opts.forEach((b, k) => {
     const o = two[k];
     b.el.object3D.visible = !!o;
+    if (o) { b.el.setColor(cols[k]); b.t.setAttribute("color", inkFor(cols[k])); }
     if (o) b.t.setAttribute("value", (m.kind === "duel" && o.abbr ? o.abbr : trunc(o.name, 12)) + "  " + pct(o.price));
   });
   const mine = stakedOn(m);
@@ -2100,9 +2258,9 @@ function fillFeatured(m) {
   // the two answers' price history, cyan and yellow, with matching labels underneath
   two.forEach((o) => { if (o.sym && !o.hist) loadHist(o); });
   const waiting = two.some((o) => o.sym && (!o.hist || !o.hist.loaded));
-  F.graph.set(two.map((o, k) => ({ color: k ? YE : CY, pts: o.hist && o.hist.loaded ? o.hist.pts : [] })),
+  F.graph.set(two.map((o, k) => ({ color: cols[k], pts: o.hist && o.hist.loaded ? o.hist.pts : [] })),
               m.sample ? "No history for sample markets" : waiting ? "Loading history..." : "Last 24 hours");
-  F.legend.forEach((lb, k) => lb.setAttribute("value", two[k] ? "- " + trunc(two[k].name, 13) + "  " + pct(two[k].price) : ""));
+  F.legend.forEach((lb, k) => { lb.setAttribute("value", two[k] ? "- " + trunc(two[k].name, 13) + "  " + pct(two[k].price) : ""); if (two[k]) lb.setAttribute("color", cols[k]); });
 }
 // one market card in the grid
 function fillCard(card, m) {
@@ -2168,25 +2326,47 @@ function fillActCard(card, it) {
 }
 function refreshMarket() {
   const m = state.market, legs = legsOf(m), now = performance.now(), live = curStore().source === "live" && !m.sample;
-  UI.title.object3D.position.x = setIcon(UI.titleIcon, m.image) ? -0.264 : -0.308;
-  UI.title.setAttribute("value", trunc(m.title, 110));
-  const sc = m.kind === "duel" ? scoreFor(m) : null;
-  UI.when.setAttribute("value", sc && sc.state !== "pre" ? (sc.state === "in" ? "LIVE   " : "FINAL   ") + `${sc.aAbbr} ${sc.a} - ${sc.b} ${sc.bAbbr}` +
-                                (sc.state === "in" ? "   " + sc.detail : "") + "   (score: ESPN)" : whenText(m));
-  UI.when.setAttribute("color", (sc ? sc.state === "in" : m.sport && m.live) ? C.red : C.dim);
-  UI.whenLive = sc ? sc.state === "in" : !!(m.sport && m.live);
+  const duel = m.kind === "duel";
+  UI.title.object3D.position.x = setIcon(UI.titleIcon, m.image) ? -0.238 : -0.278;
+  UI.title.setAttribute("value", trunc(m.title, 46));
+  // the live line: period and clock when ESPN has the game, otherwise when it starts or closes
+  const sc = duel ? scoreFor(m) : null, liveNow = sc ? sc.state === "in" : !!(m.sport && m.live);
+  const whenT = sc && sc.state !== "pre" ? (sc.state === "in" ? "LIVE  -  " + sc.detail : sc.detail) : liveNow ? "LIVE" : whenText(m);
+  UI.when.setAttribute("value", whenT);
+  UI.when.setAttribute("color", liveNow ? C.red : C.dim);
+  UI.whenLive = liveNow;
+  const half = textWidth(whenT, 0.0072) / 2 + 0.02, len = Math.max(0.01, 0.355 - half);
+  UI.rules.forEach((r, i) => { r.object3D.scale.x = len / 0.1; r.object3D.position.x = (i ? 1 : -1) * (half + len / 2); });
+  // scoreboard: games only. The score is shown only when ESPN has it (never made up)
+  UI.sb.object3D.visible = duel;
+  if (duel) {
+    [0, 1].forEach((k) => { setIcon(UI.sbIcons[k], m.opts[k].image); UI.sbAbbr[k].setAttribute("value", trunc(m.opts[k].abbr || m.opts[k].name, 14)); });
+    UI.sbScore.setAttribute("value", sc && sc.state !== "pre" ? `${sc.a}-${sc.b}` : "vs");
+  }
   UI.status.setAttribute("value", state.sim ? "Simulated odds (demo, not real)" : LIVE.on ? "LIVE: real orders on Gemini" :
                                   live ? "Live odds from Gemini" : "Sample odds");
   UI.status.setAttribute("color", !state.sim && live ? C.green : C.dim);
   UI.simBtn.t.setAttribute("value", LIVE.on ? "Live: no simulation" : state.sim ? "Stop simulation" : "Simulate odds");
-  // answers on the board
+  // footer
+  const d = m.sport && m.start ? m.start : m.closes;
+  UI.bDate.setAttribute("value", d ? (m.sport && m.start ? "" : "Closes ") + dateTZ(d) : "");
+  UI.bVol.setAttribute("value", (m.volume ? "$" + Math.round(m.volume).toLocaleString("en-US") + " vol." : "") + (sc ? "     score: ESPN" : ""));
+  const range = rangeOf(m);
+  UI.ranges.forEach((b) => {
+    const on = b.id === range;
+    b.el.object3D.visible = !state.sim;
+    b.el.setColor(on ? "#3a3f47" : PANEL_BG);
+    b.t.setAttribute("color", on ? C.text : C.dim);
+    if (b.id === "live") b.t.setAttribute("value", m.sport && m.live ? "Live" : "1H");
+  });
+  // answers on the board (answer lists only; a game's two sides are the chart labels and the pills)
   m.rowPage = clamp(m.rowPage, 0, rowPages(m) - 1);
   ROWS.forEach((row) => {
     const o = rowOption(row.i), idx = m.rowPage * ROWS.length + row.i;
-    row.b.el.setAttribute("visible", !!o);
-    if (!o) return;
+    row.b.el.setAttribute("visible", !!o && !duel);
+    if (!o || duel) return;
     const mine = stakedOn(m, idx);
-    row.b.el.setColor(m.kind === "list" && m.sel === idx ? C.keyOn : C.key);
+    row.b.el.setColor(m.sel === idx ? C.keyOn : C.key);
     row.chip.setColor(o.color);
     row.name.setAttribute("value", trunc(o.name, 24));
     row.name.object3D.position.y = mine > 0 ? 0.006 : 0;
@@ -2195,21 +2375,18 @@ function refreshMarket() {
     setTicker(row.pct, pct(o.price), m.ticker + "|" + idx);
   });
   const pages = rowPages(m);
-  UI.rPage.setAttribute("value", pages > 1 ? `Answers ${m.rowPage + 1} / ${pages}` : "");
-  UI.rPrev.el.setAttribute("visible", pages > 1); UI.rNext.el.setAttribute("visible", pages > 1);
-  // graph
-  const gs = graphOptions();
-  // while simulating, the graph shows only the simulated stretch (plus the last real point) so the movement is visible
-  const ptsOf = (o) => {
-    if (!o.hist || !o.hist.loaded) return [];
-    if (!state.sim) return o.hist.pts;
-    const real = o.hist.pts.filter((q) => !q.sim);
-    return real.slice(-1).concat(o.hist.pts.filter((q) => q.sim));
-  };
-  const series = gs.map((o) => ({ color: m.kind === "duel" ? o.color : C.green, pts: ptsOf(o) }));
-  const waiting = gs.some((o) => o.sym && (!o.hist || !o.hist.loaded));
-  UI.graph.set(series, m.sample ? "No history for sample markets" : waiting ? "Loading history..." :
-    state.sim ? "Simulated movement" : m.kind === "duel" ? "Last 24 hours" : trunc(gs[0].name, 22) + ", last 24 hours");
+  UI.rPage.setAttribute("value", pages > 1 && !duel ? `Answers ${m.rowPage + 1} / ${pages}` : "");
+  UI.rPrev.el.setAttribute("visible", pages > 1 && !duel); UI.rNext.el.setAttribute("visible", pages > 1 && !duel);
+  // chart: both teams in their own colors (games), or the selected answer's chance (lists), in the chosen range
+  const gs = graphOptions(), chart = duel ? UI.wide : UI.narrow;
+  UI.wide.show(duel); UI.narrow.show(!duel);
+  if (!state.sim) gs.forEach((o) => loadRange(o, range));
+  const ptsList = gs.map((o) => rangePts(m, o));
+  const waiting = ptsList.some((p, k) => p === null && gs[k].sym);
+  chart.set(gs.map((o, k) => ({ color: duel ? o.color : C.green, pts: ptsList[k] || [],
+                                name: duel ? trunc(o.abbr || o.name, 7) : "Yes", value: pct(o.price) })),
+            m.sample ? "No history for sample markets" : waiting ? "Loading history..." : state.sim ? "Simulated movement (not real)" :
+            duel ? "" : trunc(gs[0].name, 34), range === "all");
   // pills and piles
   UI.lip.setAttribute("visible", state.sel === null);
   legs.forEach((leg, i) => {
