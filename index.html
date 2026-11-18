@@ -2804,12 +2804,23 @@ function aiFindAnswer(m, a) {
   if (!s) return -1;
   return m.opts.findIndex((o) => o.name.toLowerCase().includes(s) || s.includes(o.name.toLowerCase()));
 }
+// find a category tab from loose words: "crypto", "the commodities section", "sport markets"...
+function aiFindCat(name) {
+  const clean2 = (s) => String(s || "").toLowerCase().replace(/\b(the|tab|tabs|section|category|markets?|page|please|open|show|go to)\b/g, " ").replace(/[^a-z0-9/ ]/g, " ").replace(/\s+/g, " ").trim();
+  const want = clean2(name), stem = (s) => s.replace(/(ies|es|s)$/, "");
+  if (!want) return null;
+  const cats = state.cats || [];
+  return cats.find((c) => clean2(c) === want) || cats.find((c) => stem(clean2(c)) === stem(want)) ||
+         cats.find((c) => clean2(c).includes(want) || want.includes(clean2(c))) || null;
+}
 // carry out what the user asked for. Returns words to speak instead of Grok's own, or nothing.
 function aiDo(a) {
   if (!a || !a.type) return "";
+  // "open crypto" means the Crypto tab, not a market called crypto
+  if (a.type === "open" && a.name && !Number.isInteger(a.index) && aiFindCat(a.name)) a = { type: "category", name: a.name };
   if (a.type === "back") { if (inMarket()) backToLobby(); else if (state.activity) { state.activity = ""; refresh(); } return ""; }
   if (a.type === "category" && a.name) {
-    const n = state.cats.find((c) => c.toLowerCase() === String(a.name).toLowerCase());
+    const n = aiFindCat(a.name);
     if (!n) return "I couldn't find that tab.";
     if (inMarket()) backToLobby();
     state.activity = ""; selectCat(n); return "";

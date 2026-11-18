@@ -240,6 +240,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Brian chose to turn interrupting off: SETTINGS.grokInterrupt = false (Grok finishes speaking before listening; tapping or patting him still stops him).
 
+- Nov 17: "open crypto" / "open commodities" did nothing after a game opened fine. Likely Grok sent {type:"open", name:"crypto"} (a market search) or a tab name that did not match exactly. `aiFindCat` now matches tabs loosely (ignores the/tab/section/markets, singular/plural, partial), and an "open" whose name matches a tab is treated as a category switch. UNTESTED.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
