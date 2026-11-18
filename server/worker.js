@@ -67,7 +67,7 @@ export default {
 
       // ---------- the voice assistant (public, but rate limited so nobody can run up the bill) ----------
       if (path === "/stt" || path === "/ask" || path === "/tts") {
-        if (request.method !== "POST") return reply({ error: "Use POST" }, 405);
+        if (request.method !== "POST" && !(path === "/tts" && request.method === "GET")) return reply({ error: "Use POST" }, 405);
         const ip = request.headers.get("CF-Connecting-IP") || "?";
         if (!rateOk(ip, 400)) return reply({ error: "Too many requests, try again in a bit" }, 429);
 
@@ -81,27 +81,42 @@ export default {
           const fd = new FormData();
           fd.append("file", new Blob([buf], { type }), type.includes("mp4") ? "speech.mp4" : "speech.webm");
           fd.append("model_id", "scribe_v2");
-          const r = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": env.ELEVENLABS_API_KEY }, body: fd });
+          fd.append("language_code", "en");
+          fd.append("no_verbatim", "true");
+          fd.append("tag_audio_events", "false");
+          const terms = String(new URL(request.url).searchParams.get("k") || "").split("|")
+            .map((s) => s.replace(/[<>{}\[\]\\]/g, "").trim().slice(0, 50)).filter((s) => s && s.split(/\s+/).length <= 5).slice(0, 90);
+          const send = (withTerms) => {
+            const f = new FormData();
+            for (const [k, v] of fd.entries()) f.append(k, v);
+            if (withTerms) terms.forEach((s) => f.append("keyterms", s));
+            return fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": env.ELEVENLABS_API_KEY }, body: f });
+          };
+          let r = await send(terms.length > 0);
+          if (!r.ok && terms.length && (r.status === 400 || r.status === 422)) r = await send(false);   // if the word list is refused, try without it
           const j = await r.json().catch(() => ({}));
           if (!r.ok) return reply({ error: "ElevenLabs: " + ((j.detail && (j.detail.message || j.detail)) || r.status) }, 502);
           return reply({ text: String(j.text || "").trim() });
         }
 
-        const body = await request.json().catch(() => ({}));
+        const body = request.method === "GET" ? { text: new URL(request.url).searchParams.get("text") || "" } : await request.json().catch(() => ({}));
 
         // thinking: the question plus what is on the table -> a short spoken answer (Grok)
         if (path === "/ask") {
           if (!env.XAI_API_KEY) return reply({ error: "Grok key is not set up" }, 503);
-          const question = String(body.question || "").slice(0, 400), context = String(body.context || "").slice(0, 4000);
+          const question = String(body.question || "").slice(0, 400), context = String(body.context || "").slice(0, 5000);
           if (!question) return reply({ error: "No question" }, 400);
+          const history = (Array.isArray(body.history) ? body.history : []).slice(-12)
+            .filter((h) => h && (h.role === "user" || h.role === "assistant") && h.content)
+            .map((h) => ({ role: h.role, content: String(h.content).slice(0, 500) }));
           const r = await fetch("https://api.x.ai/v1/chat/completions", {
             method: "POST",
             headers: { "Content-Type": "application/json", "Authorization": "Bearer " + env.XAI_API_KEY },
             body: JSON.stringify({
               model: env.XAI_MODEL || "grok-4.20-0309-non-reasoning",
               max_tokens: 260, temperature: 0.4,
-              messages: [{ role: "system", content: ASSISTANT_RULES },
-                         { role: "user", content: "What is on the table right now:\n" + context + "\n\nThe user said: " + question }]
+              messages: [{ role: "system", content: ASSISTANT_RULES }].concat(history, [
+                         { role: "user", content: "What is on the table right now:\n" + context + "\n\nThe user said: " + question }])
             })
           });
           const j = await r.json().catch(() => ({}));
@@ -122,7 +137,7 @@ export default {
           const voices = [env.ELEVENLABS_VOICE, "jBpfuIE2acCO8z3wKNLl", "MF3mGyEYCl7XYWbV9V6O", "EXAVITQu4vr4xnSDxMaL", "21m00Tcm4TlvDq8ikWAM"].filter(Boolean);
           let lastErr = "";
           for (const voice of voices) {
-            const r = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(voice) + "?output_format=mp3_44100_128", {
+            const r = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(voice) + "/stream?output_format=mp3_44100_128", {
               method: "POST",
               headers: { "Content-Type": "application/json", "xi-api-key": env.ELEVENLABS_API_KEY },
               body: JSON.stringify({ text, model_id: "eleven_flash_v2_5",
@@ -208,7 +223,8 @@ function rateOk(ip, limit) {
 const ASSISTANT_RULES = `You are Grok, a small, cheerful floating flame-spirit with big eyes who lives on the user's table in Tabletop Market, a mixed reality app on a Meta Quest that shows live prediction markets from Gemini.
 Your personality is warm, playful and a little cute, never sarcastic, and you keep things light.
 Answer out loud: one to three short sentences, at most 60 words, plain spoken English, no lists, no markdown, no emoji.
-Use the table information you are given, plus general knowledge. If you do not know, say so briefly.
+Use the table information you are given, the conversation so far, and general knowledge. If you do not know, say so briefly.
+The user's words come from speech recognition and may be slightly misheard (team or coin names especially): pick the most sensible meaning given the table, and ask a short question back only if you really cannot tell.
 Prices are probabilities: 0.62 means a 62 percent chance.
 Never recommend a bet, never tell the user what to pick or how much to stake, never promise or confidently predict an outcome, and never encourage betting more. You may explain what the odds mean, how they moved, what the market is about, and how to use the app.
 You can act in the app, but only when the user clearly asks. The list of actions you may use is given with the table information; use exactly those shapes.
