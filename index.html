@@ -3037,7 +3037,11 @@ liveBtn.addEventListener("click", () => {
   unlockLive(pass).then((r) => {
     liveBtn.className = "on";
     liveBtn.textContent = (r.sandbox ? "Live trading ON (practice site)" : "Live trading ON: real money") + ", max " + money(LIVE.cap) + " per order";
-  }).catch((err) => { LIVE.on = false; LIVE.pass = ""; liveBtn.textContent = "Not unlocked: " + err.message; });
+  }).catch((err) => {
+    LIVE.on = false; LIVE.pass = "";
+    liveBtn.textContent = "Not unlocked: " + err.message + " (press to try again)";
+    window.alert("Live trading did NOT turn on.\n\nReason: " + err.message + "\n\nYou are still in test mode. Press the button again to retry.");
+  });
 });
 
 /* ---------- Arc: every pick's stake is locked onchain ----------
