@@ -570,7 +570,7 @@ function makePile(parent, x, z) {
   const text = label(tag, "", 0, 0, 0, 0.0085, C.text);                    // messages ("Pinch to take ...")
   const valT = tickerLabel(tag, 0, 0, 0, 0.0085, C.text, "right");         // what the pick is worth, on rolling wheels
   const chg = label(tag, "", 0, 0, 0, 0.0085, C.green, "left");            // gain or loss
-  valT.tk.flash = false;
+  valT.tk.flashAll = true;                                                  // the whole value flashes green (up) or red (down)
   // an invisible box around the heap so a mouse or controller can press it
   const proxy = mk("a-box", { position: "0 0.045 0", width: 0.13, height: 0.1, depth: 0.11,
                               material: "opacity: 0; transparent: true; depthWrite: false" }, holder);
@@ -832,10 +832,11 @@ function setTicker(el, text, key, base) {
     seqs.push(seq);
   }
   // only the digits that turn flash green or red; the rest keep their normal color
+  // (flashAll: the whole number flashes, e.g. the cash value over a pile)
   if (tk.flash) seqs.forEach((seq, i) => {
-    if (seq.length < 2) return;
+    if (seq.length < 2 && !tk.flashAll) return;
     const s = tk.slots[i], c = dir > 0 ? C.green : C.red;
-    s.a.setAttribute("color", c); tkSlotB(el, s).setAttribute("color", c);
+    s.a.setAttribute("color", c); if (seq.length >= 2 || s.b) tkSlotB(el, s).setAttribute("color", c);
   });
   const steps = Math.max.apply(null, seqs.map((q) => q.length - 1)), Q = Math.PI / 2;
   tween("tick" + el.object3D.uuid, 360 + 80 * steps, (k) => {
