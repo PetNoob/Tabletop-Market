@@ -975,7 +975,7 @@ function build() {
   UI.arcLine = label(bal, "", 0, -0.058, 0.006, 0.0048, C.dim);
 
   // handle to move everything (always there)
-  UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 0.012 0.222", rot: "-90 0 0", cls: "clickable" });
+  UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 0.008 0.25", rot: "-90 0 0", cls: "clickable" });
   UI.handle.setAttribute("id", "handle");
 
   buildLobby(market);
@@ -1099,7 +1099,8 @@ function setButtonWidth(b, w) {
 }
 
 function buildLobby(market) {
-  const L = UI.lobby = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
+  // start where the lobby belongs (A-Frame applies this a moment after creation, so it must be the lobby spot, not the board)
+  const L = UI.lobby = mk("a-entity", { position: `0 ${STAGE_LOBBY.y} ${STAGE_LOBBY.z}`, rotation: `${STAGE_LOBBY.rx} 0 0` }, market);
   slab(L, LW, LH, 0.008, PANEL_BG, { r: 0.028, opacity: 0.97 });
   // header (stays put while the content scrolls)
   UI.lTitle = label(L, "Tabletop Market", -0.355, 0.212, 0.006, 0.0102, C.text, "left");
@@ -1760,7 +1761,7 @@ function setStage(k) {
   b.position.y = -0.015 * (1 - k);
   if (UI.bar) UI.bar.object3D.visible = k < 0.5;
   // the grab handle: just under the category bar in the lobby, at the table's front edge in a market
-  if (UI.handle) UI.handle.object3D.position.set(0, 0.012 - 0.018 * k, 0.222 + 0.053 * k);
+  if (UI.handle) UI.handle.object3D.position.set(0, 0.008 - 0.014 * k, 0.25 + 0.025 * k);
 }
 // opening a market: the list slides back and the table grows in, then the pressed card grows into the board
 function growIntoBoard(card, after) {
