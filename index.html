@@ -2191,8 +2191,8 @@ function refreshLobby() {
   UI.searchText.setAttribute("color", listening ? CY : state.searchQ ? C.text : C.dim);
   UI.sortBtn.t.setAttribute("value", "Sort: " + LOBBY_SORTS.find((s) => s[0] === (state.sort || "default"))[1]);
   UI.lStatus.setAttribute("value", act ? (LIVE.on ? "Your Gemini account" : "Test money") :
-                                   st.loading ? "Loading..." : st.source === "live" ? "Live from Gemini" : "Sample markets");
-  UI.lStatus.setAttribute("color", act ? (LIVE.on ? C.green : C.dim) : !st.loading && st.source === "live" ? C.green : C.dim);
+                                   st.loading ? "Loading..." : st.source === "live" ? "Live from Gemini" : "Gemini down: samples, retrying");
+  UI.lStatus.setAttribute("color", act ? (LIVE.on ? C.green : C.dim) : st.loading ? C.dim : st.source === "live" ? C.green : C.red);
   // lay out the rows that fit, from the current scroll position
   const F = UI.feat;
   F.on = false; CARDS.forEach((c) => { c.on = false; });
