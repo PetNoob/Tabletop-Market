@@ -205,6 +205,13 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Brian confirmed the bridge: steps 1, 2 and 3 all got real check marks (burn on Arc, Circle confirmation, mint on Base Sepolia). README updated: bridge section, CCTP addresses, Arc award listed, Activity/balance/pictures/animations, new Gemini endpoints.
 
+## Voice assistant (built Nov 17, UNTESTED)
+- Brian has Grok (xAI, needed a payment method) and ElevenLabs keys; they go in Cloudflare as XAI_API_KEY and ELEVENLABS_API_KEY. Optional XAI_MODEL (default grok-4.20-0309-non-reasoning, from docs.x.ai models page) and ELEVENLABS_VOICE (default JBFqnCBsd6RMkjVDRZzb).
+- Worker routes (public, soft rate limit 90 an hour per IP, in memory): POST /stt (raw audio body -> ElevenLabs POST /v1/speech-to-text, model scribe_v2), POST /ask ({question, context} -> xAI /v1/chat/completions, max 260 tokens, ASSISTANT_RULES: 1-3 spoken sentences, never recommend a bet, JSON {say, action}), POST /tts ({text} -> ElevenLabs /v1/text-to-speech/{voice}, eleven_flash_v2_5, mp3). /status now also reports voice and grok booleans.
+- App: `buildOrb` puts a glowing orb at (0.43, 0.075, 0.06) on the market root with a subtitle panel. Press = record (MediaRecorder) up to 8 s, press again to stop; then stt -> ask (with `aiContext()`: mode, balance, open market and odds with 24 h change, user picks, or lobby markets by index) -> `aiDo(action)` (open market by index, category, back, activity, simulate; never money) -> tts played through an AudioContext with an analyser that drives the orb pulse. Colors: idle green, listening white, thinking amber, speaking green.
+- Welcome screen: "Turn on the voice assistant (microphone)" asks for mic permission before AR (the prompt may be hidden in immersive mode). AudioContext is unlocked on the Enter press.
+- Not verified: MediaRecorder and mic inside the Quest browser's immersive AR session, and whether ElevenLabs accepts the Quest's webm audio.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

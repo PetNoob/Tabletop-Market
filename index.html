@@ -35,6 +35,8 @@
   #windowBtn:hover { color: #f2f4f7; border-color: #4d535d; }
   #liveBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 8px; margin-top: 6px; }
   #liveBtn.on { color: #2fbf71; }
+  #voiceBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 6px; margin-top: 0; }
+  #voiceBtn.on { color: #2fbf71; }
   #arcBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 6px; margin-top: 0; }
   #arcPanel { text-align: left; font-size: 12.5px; color: #c9cfd6; background: #15171a; border: 1px solid #2c3037;
               border-radius: 10px; padding: 12px 14px; margin-top: 6px; max-height: 42vh; overflow: auto; line-height: 1.5; }
@@ -61,6 +63,7 @@
     <button id="enterBtn">Enter</button>
     <button id="windowBtn">View on this screen instead</button>
     <button id="liveBtn" style="display:none">Owner: turn on live trading</button>
+    <button id="voiceBtn" style="display:none">Turn on the voice assistant (microphone)</button>
     <button id="arcBtn">Blockchain setup</button>
     <div id="arcPanel" style="display:none"></div>
     <p id="wStatus">Loading markets from Gemini...</p>
@@ -105,6 +108,7 @@ const SETTINGS = {
   },
   liveBudget: 10,       // live mode only: shown until the real Gemini balance arrives (and used if the server cannot fetch it)
   oddsAnim: true,       // numbers slide up or down and flash green or red when the odds change
+  assistant: true,     // the talking orb (needs serverUrl, with Grok and ElevenLabs keys on the server)
   icons: true,          // show Gemini's market pictures (needs serverUrl, which passes them through)
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
@@ -970,6 +974,7 @@ function build() {
   UI.ghostAt = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, market);
   UI.ghost = slab(UI.ghostAt, 0.66, 0.42, 0.008, C.panel, { r: 0.026, opacity: SEE, order: 7, pos: "0 0 0.012" });
   UI.ghost.setAttribute("visible", false);
+  buildOrb(market);
 
   // glove-style hands: A-Frame's built-in hand model, drawn see-through over your real hands
   if (S.handStyle === "glove") ["left", "right"].forEach((h) => {
@@ -2058,7 +2063,7 @@ window.TM = {
   state, press, openMarket, backToLobby, phys, shove,
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); },
+  frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
   hoverAt: (point, ray) => {
@@ -2130,10 +2135,11 @@ function showEnterChoices() {
   windowBtn.style.display = arReady ? "block" : "none";
 }
 enterBtn.addEventListener("click", () => {
+  try { aiAudio(); } catch (e) {}
   closeWelcome();
   if (arReady && scene.enterAR) Promise.resolve(scene.enterAR()).catch((err) => console.warn("AR did not start:", err));
 });
-windowBtn.addEventListener("click", closeWelcome);
+windowBtn.addEventListener("click", () => { try { aiAudio(); } catch (e) {} closeWelcome(); });
 // owner only: type the passcode to switch from test money to real Gemini orders
 const liveBtn = document.getElementById("liveBtn");
 if (S.serverUrl) liveBtn.style.display = "block";
@@ -2423,6 +2429,199 @@ arcPanel.addEventListener("click", (ev) => {
                .finally(() => { ARC.deploying = false; arcShow(); });
   }
 });
+/* ---------- the voice assistant: a glowing orb on the table ----------
+   Press the orb, speak, press it again (or wait 8 seconds). The app records your voice, the server turns it into
+   text (ElevenLabs), asks Grok with what is on the table right now, and the answer is spoken back (ElevenLabs)
+   and shown as a subtitle. It explains markets and moves around the app; it never recommends a bet. */
+const AI = { mode: "idle", ready: null, lvl: 0, buf: null };
+const ORB_COLOR = { idle: 0x2fbf71, listening: 0xf2f4f7, thinking: 0xf5b942, speaking: 0x3bd184 };
+function glowTexture() {
+  const cv = document.createElement("canvas"); cv.width = cv.height = 64;
+  const g = cv.getContext("2d"), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, "rgba(255,255,255,0.9)"); gr.addColorStop(0.4, "rgba(255,255,255,0.35)"); gr.addColorStop(1, "rgba(255,255,255,0)");
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(cv);
+}
+function buildOrb(market) {
+  if (!S.assistant || !S.serverUrl) return;
+  const at = UI.orbAt = mk("a-entity", { position: "0.43 0.075 0.06", class: "clickable" }, market);
+  UI.orb = new THREE.Mesh(new THREE.SphereGeometry(0.026, 32, 20),
+                          new THREE.MeshStandardMaterial({ color: 0x0c1712, emissive: new THREE.Color(ORB_COLOR.idle), emissiveIntensity: 0.5,
+                                                           roughness: 0.25, metalness: 0.1 }));
+  at.object3D.add(UI.orb);
+  UI.orbGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: ORB_COLOR.idle, transparent: true, depthWrite: false,
+                                                           blending: THREE.AdditiveBlending }));
+  UI.orbGlow.scale.setScalar(0.1); at.object3D.add(UI.orbGlow);
+  UI.orbLabel = label(at, "Ask me", 0, -0.042, 0, 0.0058, C.dim);
+  // the subtitle above the orb
+  UI.sayAt = mk("a-entity", { position: "-0.03 0.13 -0.02", rotation: "-8 -28 0", visible: false }, at);
+  slab(UI.sayAt, 0.28, 0.14, 0.004, C.panel, { r: 0.016, opacity: SEE });
+  UI.sayText = label(UI.sayAt, "", -0.128, 0.058, 0.004, 0.0062, C.text, "left", 0.256, "top");
+  // it behaves like a button: fingertip, pinch, trigger or mouse
+  const b = { el: at, t: UI.orbLabel, w: 0.06, h: 0.06, d: 0.06, onPress: orbPressed, enabled: () => true, inside: {}, last: 0, z: 0.06 };
+  at.tmEnabled = b.enabled;
+  at.addEventListener("click", (e) => press(b, e));
+  BUTTONS.push(b);
+  // is the server set up for it?
+  fetch(S.serverUrl.replace(/\/+$/, "") + "/status").then((r) => r.json()).then((s) => { AI.ready = !!(s.voice && s.grok); })
+    .catch(() => { AI.ready = false; });
+}
+const aiUrl = (p) => S.serverUrl.replace(/\/+$/, "") + p;
+function aiAudio() {
+  if (!AI.ctx) {
+    AI.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    AI.outAn = AI.ctx.createAnalyser(); AI.outAn.connect(AI.ctx.destination);
+  }
+  if (AI.ctx.state === "suspended") AI.ctx.resume();
+  return AI.ctx;
+}
+function aiMode(m) {
+  AI.mode = m;
+  if (!UI.orb) return;
+  UI.orb.material.emissive.setHex(ORB_COLOR[m]); UI.orbGlow.material.color.setHex(ORB_COLOR[m]);
+  UI.orbLabel.setAttribute("value", { idle: "Ask me", listening: "Listening... press when done", thinking: "Thinking...", speaking: "Speaking" }[m]);
+}
+function aiSub(text, holdMs) {
+  if (!UI.sayAt) return;
+  clearTimeout(AI.hide);
+  UI.sayAt.setAttribute("visible", true);
+  UI.sayText.setAttribute("value", trunc(String(text).split("
+").map(clean).join("
+"), 320));   // keep line breaks
+  if (holdMs) AI.hide = setTimeout(() => UI.sayAt.setAttribute("visible", false), holdMs);
+}
+function orbPressed() {
+  if (AI.mode === "listening") return aiStop();
+  if (AI.mode === "speaking") { try { AI.src && AI.src.stop(); } catch (e) {} return; }   // press while it talks = stop talking
+  if (AI.mode !== "idle") return;
+  if (AI.ready === false) return aiSub("The assistant is not set up on the server yet (Grok and ElevenLabs keys).", 6000);
+  aiListen();
+}
+async function aiListen() {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { return aiSub("I can't hear you: the microphone is blocked. Turn on the voice assistant on the start screen first.", 7000); }
+  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((x) => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(x)) || "";
+  const chunks = [], rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  AI.rec = rec;
+  try { const ctx = aiAudio(); AI.micSrc = ctx.createMediaStreamSource(stream); AI.micAn = ctx.createAnalyser(); AI.micSrc.connect(AI.micAn); } catch (e) {}
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  rec.onstop = () => {
+    stream.getTracks().forEach((tr) => tr.stop());
+    try { AI.micSrc && AI.micSrc.disconnect(); } catch (e) {}
+    AI.micAn = null;
+    aiSend(new Blob(chunks, { type: rec.mimeType || mime || "audio/webm" }));
+  };
+  rec.start();
+  aiMode("listening"); aiSub("Listening... ask about this market, or say \"open crypto\" or \"go back\". Press the orb when you're done.");
+  AI.timer = setTimeout(aiStop, 8000);
+}
+function aiStop() {
+  clearTimeout(AI.timer);
+  if (AI.rec && AI.rec.state === "recording") { aiMode("thinking"); AI.rec.stop(); }
+}
+async function aiPost(p, body, json) {
+  const r = await fetch(aiUrl(p), { method: "POST", headers: { "Content-Type": json ? "application/json" : (body.type || "audio/webm") },
+                                    body: json ? JSON.stringify(body) : body });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || ("server said " + r.status));
+  return j;
+}
+async function aiSend(blob) {
+  aiMode("thinking"); aiSub("Thinking...");
+  try {
+    const heard = String((await aiPost("/stt", blob, false)).text || "").trim();
+    if (!heard) { aiMode("idle"); return aiSub("Sorry, I didn't catch that. Press the orb and try again.", 5000); }
+    aiSub("You: " + heard);
+    const a = await aiPost("/ask", { question: heard, context: aiContext() }, true);
+    const say = a.say || "Sorry, I don't have an answer for that.";
+    aiDo(a.action);
+    aiSub("You: " + heard + "\n\n" + say);
+    await aiSpeak(say, heard);
+  } catch (err) {
+    aiMode("idle"); aiSub("Something went wrong: " + err.message, 8000);
+  }
+}
+async function aiSpeak(text, heard) {
+  try {
+    const r = await fetch(aiUrl("/tts"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+    if (!r.ok) throw new Error("voice " + r.status);
+    const ctx = aiAudio(), audio = await ctx.decodeAudioData(await r.arrayBuffer());
+    const src = ctx.createBufferSource(); src.buffer = audio; src.connect(AI.outAn);
+    AI.src = src;
+    aiMode("speaking");
+    src.onended = () => { aiMode("idle"); aiSub("You: " + heard + "\n\n" + text, 9000); };
+    src.start();
+  } catch (e) {
+    console.warn("assistant voice:", e);
+    aiMode("idle"); aiSub("You: " + heard + "\n\n" + text, 12000);              // no sound, but the answer stays on screen
+  }
+}
+// what is on the table right now, in plain words, for Grok
+function aiContext() {
+  const L = [];
+  L.push("Mode: " + (LIVE.on ? "live, the owner's real money on Gemini" : "test money") + ". Balance " + money(state.balance) + ".");
+  if (inMarket()) {
+    const m = state.market;
+    L.push("Open market: " + m.title + (m.sport && m.live ? " (live now)" : "") + ". Category " + (m.category || "") + ". " + whenText(m));
+    m.opts.slice(0, 8).forEach((o) => {
+      const h = o.hist && o.hist.loaded && o.hist.pts.length ? o.hist.pts : null;
+      L.push(`- ${o.name}: ${pct(o.price)}` + (h ? ` (about 24 hours ago: ${pct(h[0].p)})` : ""));
+    });
+    if (state.sim) L.push("The odds are being simulated right now (demo, not real).");
+    Object.keys(state.picks).filter((k) => k.split("|")[0] === m.ticker).forEach((k) => {
+      const p = state.picks[k]; L.push(`The user holds a pick: ${p.what || k}, staked ${money(p.stake)}.`);
+    });
+  } else if (state.activity) {
+    L.push("The Activity tab is open (" + state.activity + ").");
+  } else {
+    L.push("Lobby. Category tab: " + state.cat + ". Tabs: " + state.cats.join(", ") + ".");
+    visibleMarkets().forEach((m, i) => L.push(`Market ${i}: ${m.title}: ` + m.opts.slice(0, 2).map((o) => o.name + " " + pct(o.price)).join(", ")));
+  }
+  return L.join("\n");
+}
+// carry out what the user asked for (moving around the app only; never money)
+function aiDo(a) {
+  if (!a || !a.type) return;
+  if (a.type === "back" && inMarket()) backToLobby();
+  else if (a.type === "category" && a.name) {
+    const n = state.cats.find((c) => c.toLowerCase() === String(a.name).toLowerCase());
+    if (n) { if (inMarket()) backToLobby(); state.activity = ""; selectCat(n); }
+  } else if (a.type === "open" && inLobby() && !state.activity) {
+    const m = visibleMarkets()[a.index | 0];
+    if (m) { UI.fromCard = CARDS.find((c) => c.m === m) || null; openMarket(m); }
+  } else if (a.type === "activity" && !inMarket()) { state.activity = "positions"; state.page = 0; actLoad(); refresh(); }
+  else if (a.type === "simulate" && inMarket() && !LIVE.on && !state.sim) toggleSim();
+}
+// the orb breathes when idle, follows your voice when listening, swirls when thinking, pulses with its voice when speaking
+function stepOrb(now) {
+  if (!UI.orb) return;
+  let lvl = 0;
+  const an = AI.mode === "listening" ? AI.micAn : AI.mode === "speaking" ? AI.outAn : null;
+  if (an) {
+    const a = AI.buf || (AI.buf = new Uint8Array(256));
+    an.getByteTimeDomainData(a);
+    let s = 0; for (let i = 0; i < a.length; i++) { const v = (a[i] - 128) / 128; s += v * v; }
+    lvl = Math.min(1, Math.sqrt(s / a.length) * 5);
+  }
+  AI.lvl = AI.lvl * 0.75 + lvl * 0.25;
+  const idle = AI.mode === "idle", think = AI.mode === "thinking";
+  UI.orb.material.emissiveIntensity = idle ? 0.45 + 0.15 * Math.sin(now / 700) : think ? 0.6 + 0.35 * Math.sin(now / 140) : 0.7 + AI.lvl * 1.4;
+  UI.orb.scale.setScalar(1 + (idle ? 0.03 * Math.sin(now / 700) : think ? 0.04 * Math.sin(now / 140) : AI.lvl * 0.3));
+  UI.orbGlow.scale.setScalar(0.1 + AI.lvl * 0.09 + (think ? 0.015 * Math.sin(now / 140) : idle ? 0.01 * Math.sin(now / 700) : 0));
+  if (think) UI.orb.rotation.y += 0.06;
+}
+// start screen: ask for the microphone here, because the permission box can be hidden once mixed reality starts
+const voiceBtn = document.getElementById("voiceBtn");
+if (S.assistant && S.serverUrl && navigator.mediaDevices) voiceBtn.style.display = "block";
+voiceBtn.addEventListener("click", () => {
+  try { aiAudio(); } catch (e) {}
+  navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => {
+    s.getTracks().forEach((tr) => tr.stop());
+    voiceBtn.className = "on"; voiceBtn.textContent = "Voice assistant on: press the glowing orb on the table to talk";
+  }).catch(() => { voiceBtn.textContent = "Microphone blocked. Allow it in the browser settings, then try again"; });
+});
+
 arcInit();
 loadTestState();
 

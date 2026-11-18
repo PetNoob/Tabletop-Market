@@ -11,8 +11,12 @@
      GEMINI_API_KEY      the Gemini API key (must have the Trader role)
      GEMINI_API_SECRET   the Gemini API secret
      LIVE_PASSCODE       a long passcode. Only someone who knows it can trade.
+     XAI_API_KEY         Grok (xAI) key, for the voice assistant's answers
+     ELEVENLABS_API_KEY  ElevenLabs key, for the assistant's voice and for listening
 
    Optional plain settings:
+     XAI_MODEL            Grok model (default grok-4.20-0309-non-reasoning)
+     ELEVENLABS_VOICE     ElevenLabs voice id (default JBFqnCBsd6RMkjVDRZzb)
      MAX_ORDER_USD        biggest order in dollars (default 1)
      GEMINI_SANDBOX       "1" = use Gemini's practice site instead of the real one
      GEMINI_NONCE_SECONDS "1" = the key was created with "time-based nonce" turned on
@@ -61,8 +65,74 @@ export default {
         return new Response(r.body, { status: 200, headers: h });
       }
 
+      // ---------- the voice assistant (public, but rate limited so nobody can run up the bill) ----------
+      if (path === "/stt" || path === "/ask" || path === "/tts") {
+        if (request.method !== "POST") return reply({ error: "Use POST" }, 405);
+        const ip = request.headers.get("CF-Connecting-IP") || "?";
+        if (!rateOk(ip, 90)) return reply({ error: "Too many requests, try again in a bit" }, 429);
+
+        // listening: audio from the headset microphone -> text (ElevenLabs Scribe)
+        if (path === "/stt") {
+          if (!env.ELEVENLABS_API_KEY) return reply({ error: "ElevenLabs key is not set up" }, 503);
+          const buf = await request.arrayBuffer();
+          if (buf.byteLength < 200) return reply({ error: "No audio" }, 400);
+          if (buf.byteLength > 4000000) return reply({ error: "Audio is too long" }, 413);
+          const type = request.headers.get("Content-Type") || "audio/webm";
+          const fd = new FormData();
+          fd.append("file", new Blob([buf], { type }), type.includes("mp4") ? "speech.mp4" : "speech.webm");
+          fd.append("model_id", "scribe_v2");
+          const r = await fetch("https://api.elevenlabs.io/v1/speech-to-text", { method: "POST", headers: { "xi-api-key": env.ELEVENLABS_API_KEY }, body: fd });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) return reply({ error: "ElevenLabs: " + ((j.detail && (j.detail.message || j.detail)) || r.status) }, 502);
+          return reply({ text: String(j.text || "").trim() });
+        }
+
+        const body = await request.json().catch(() => ({}));
+
+        // thinking: the question plus what is on the table -> a short spoken answer (Grok)
+        if (path === "/ask") {
+          if (!env.XAI_API_KEY) return reply({ error: "Grok key is not set up" }, 503);
+          const question = String(body.question || "").slice(0, 400), context = String(body.context || "").slice(0, 4000);
+          if (!question) return reply({ error: "No question" }, 400);
+          const r = await fetch("https://api.x.ai/v1/chat/completions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "Authorization": "Bearer " + env.XAI_API_KEY },
+            body: JSON.stringify({
+              model: env.XAI_MODEL || "grok-4.20-0309-non-reasoning",
+              max_tokens: 260, temperature: 0.4,
+              messages: [{ role: "system", content: ASSISTANT_RULES },
+                         { role: "user", content: "What is on the table right now:\n" + context + "\n\nThe user said: " + question }]
+            })
+          });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) return reply({ error: "Grok: " + ((j.error && (j.error.message || j.error)) || r.status) }, 502);
+          const text = String((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
+          let out = { say: text.replace(/[{}"]/g, "").slice(0, 400), action: null };
+          const m = text.match(/\{[\s\S]*\}/);
+          if (m) { try { const p = JSON.parse(m[0]); out = { say: String(p.say || "").slice(0, 500), action: p.action || null }; } catch (e) {} }
+          return reply(out);
+        }
+
+        // speaking: text -> natural voice (ElevenLabs), sent back as an mp3
+        if (path === "/tts") {
+          if (!env.ELEVENLABS_API_KEY) return reply({ error: "ElevenLabs key is not set up" }, 503);
+          const text = String(body.text || "").slice(0, 600);
+          if (!text) return reply({ error: "No text" }, 400);
+          const voice = env.ELEVENLABS_VOICE || "JBFqnCBsd6RMkjVDRZzb";
+          const r = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(voice) + "?output_format=mp3_44100_128", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "xi-api-key": env.ELEVENLABS_API_KEY },
+            body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" })
+          });
+          if (!r.ok) { const t = await r.text(); return reply({ error: "ElevenLabs: " + t.slice(0, 160) }, 502); }
+          const h = new Headers(cors); h.set("Content-Type", "audio/mpeg"); h.set("Cache-Control", "no-store");
+          return new Response(r.body, { status: 200, headers: h });
+        }
+      }
+
       if (path === "/" || path === "/status") {
-        return reply({ ok: true, tradingConfigured: configured, unlocked, maxOrderUsd: maxUsd, sandbox: env.GEMINI_SANDBOX === "1" });
+        return reply({ ok: true, tradingConfigured: configured, unlocked, maxOrderUsd: maxUsd, sandbox: env.GEMINI_SANDBOX === "1",
+                       voice: !!env.ELEVENLABS_API_KEY, grok: !!env.XAI_API_KEY });
       }
 
       // everything below spends or reveals the owner's account, so it needs the passcode
@@ -114,6 +184,26 @@ export default {
 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// at most `limit` assistant requests an hour from one address (kept in memory, so it is a soft limit)
+const HITS = new Map();
+function rateOk(ip, limit) {
+  const now = Date.now(), list = (HITS.get(ip) || []).filter((t) => now - t < 3600000);
+  if (list.length >= limit) { HITS.set(ip, list); return false; }
+  list.push(now); HITS.set(ip, list);
+  if (HITS.size > 5000) HITS.clear();
+  return true;
+}
+
+// what the assistant may and may not do. Gemini is a regulated market, so it explains and never pushes a bet.
+const ASSISTANT_RULES = `You are the voice assistant inside Tabletop Market, a mixed reality app on a Meta Quest that shows live prediction markets from Gemini on the user's table.
+Answer out loud: one to three short sentences, at most 60 words, plain spoken English, no lists, no markdown, no emoji.
+Use the table information you are given, plus general knowledge. If you do not know, say so briefly.
+Prices are probabilities: 0.62 means a 62 percent chance.
+Never recommend a bet, never tell the user what to pick or how much to stake, never promise or confidently predict an outcome, and never encourage betting more. You may explain what the odds mean, how they moved, what the market is about, and how to use the app.
+If the user asks you to place a bet or cash out, tell them to press a colored pill to pick, or lift the cash off the table to cash out.
+Reply with ONLY a JSON object: {"say": "<what to speak>", "action": null}
+action may instead be one of: {"type":"open","index":<number of a market listed on the table>}, {"type":"category","name":"<tab name>"}, {"type":"back"}, {"type":"activity"}, {"type":"simulate"}. Only use an action when the user clearly asks for it.`;
 
 // compare two passcodes without stopping early at the first wrong letter
 function samePass(a, b) {
