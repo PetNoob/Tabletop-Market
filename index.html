@@ -566,7 +566,11 @@ function makePile(parent, x, z) {
   core.visible = false; core2.visible = false;                              // the heap is made only of notes now
   const BASE = [new THREE.Color(1, 1, 1), new THREE.Color(0.86, 0.93, 0.88), new THREE.Color(0.76, 0.88, 0.8)];
   const LIT = [new THREE.Color(1.9, 2.1, 1.9), new THREE.Color(1.7, 1.95, 1.75), new THREE.Color(1.6, 1.9, 1.65)];   // above 1 = brighter than normal
-  const text = label(holder, "", 0, 0.085, 0, 0.0085, C.text);
+  const tag = mk("a-entity", { position: "0 0.085 0" }, holder);      // floats above the heap (or your hand)
+  const text = label(tag, "", 0, 0, 0, 0.0085, C.text);                    // messages ("Pinch to take ...")
+  const valT = tickerLabel(tag, 0, 0, 0, 0.0085, C.text, "right");         // what the pick is worth, on rolling wheels
+  const chg = label(tag, "", 0, 0, 0, 0.0085, C.green, "left");            // gain or loss
+  valT.tk.flash = false;
   // an invisible box around the heap so a mouse or controller can press it
   const proxy = mk("a-box", { position: "0 0.045 0", width: 0.13, height: 0.1, depth: 0.11,
                               material: "opacity: 0; transparent: true; depthWrite: false" }, holder);
@@ -584,7 +588,17 @@ function makePile(parent, x, z) {
     heldCount: () => (pile.heldFrac > 0 && bills.length ? clamp(Math.round(pile.heldFrac * bills.length), 1, bills.length) : 0),
     moundCount: () => bills.length - pile.heldCount(),
     setScale: (s) => { if (s !== pile.scale) { pile.scale = s; group.scale.setScalar(s); awake = true; } },
-    setLabel: (v) => text.setAttribute("value", v),
+    setLabel: (v) => { text.setAttribute("value", v); valT.object3D.visible = false; chg.object3D.visible = false; },
+    // value on rolling wheels, then the change in green (gain) or red (loss), centered together
+    setValue: (val, change, up, key) => {
+      text.setAttribute("value", "");
+      const gap = 0.012, wv = textWidth(val, 0.0085), wc = textWidth(change, 0.0085), x0 = -(wv + gap + wc) / 2;
+      valT.object3D.visible = chg.object3D.visible = true;
+      setTicker(valT, val, key);
+      valT.object3D.position.x = x0 + wv;
+      chg.object3D.position.x = x0 + wv + gap;
+      chg.setAttribute("value", change); chg.setAttribute("color", up ? C.green : C.red);
+    },
     setLit: (k) => { if (k !== pile.lit) { pile.lit = k; awake = true; } },       // light up the top k notes
     clear: () => { bills.length = 0; flying.length = 0; pile.heldFrac = 0; pile.lit = 0; inst.count = 0; coreS = 0;
                    core.scale.setScalar(0.0001); core2.visible = false; awake = true; },
@@ -679,8 +693,8 @@ function makePile(parent, x, z) {
       core.scale.setScalar(Math.max(0.0001, coreS));
       if (nH) { core2.scale.setScalar(layH.f * 0.85); core2.position.set(hand.x, hand.y - layH.H * 0.85 - 0.006, hand.z); }
       // the label floats above the heap, or above your hand while you carry cash
-      if (nH) text.object3D.position.set(hand.x * s, hand.y * s + 0.05, hand.z * s);
-      else text.object3D.position.set(0, lay.H * s + 0.036, 0);
+      if (nH) tag.object3D.position.set(hand.x * s, hand.y * s + 0.05, hand.z * s);
+      else tag.object3D.position.set(0, lay.H * s + 0.036, 0);
       awake = busy;
     }
   };
@@ -1692,30 +1706,23 @@ function buildMarket(market) {
   UI.backBtn = button(ctl, "All markets", 0, 0.029, 0.18, 0.05, backToLobby, { color: C.panel, r: 0.025, enabled: inMarket });
   UI.simBtn = button(ctl, "Simulate odds", 0, -0.029, 0.18, 0.05, toggleSim, { color: C.panel, r: 0.025, enabled: inMarket });
 
-  // amount panel (hidden until you press a pill)
+  // amount panel (hidden until you press a pill): what you pick and how much on the left, a number pad on the right
   const p = mk("a-entity", { position: "0 0.15 0.33", rotation: "-35 0 0", visible: false }, market);
   UI.panel = p;
-  slab(p, 0.54, 0.235, 0.008, C.panel, { r: 0.024, opacity: 0.95 });
+  slab(p, 0.5, 0.21, 0.008, PANEL_BG, { r: 0.024, opacity: 0.97 });
+  rim(p, 0.5, 0.21, 0.024);
   const on = { enabled: () => state.sel !== null };
-  UI.pTitle = label(p, "", -0.09, 0.09, 0.006, 0.0095, C.dim);
-  UI.pAmount = label(p, "", -0.09, 0.052, 0.006, 0.024, C.text);
-  UI.pWin = label(p, "", -0.09, 0.02, 0.006, 0.0078, C.acc);
-  // slider
-  UI.track = slab(p, 0.29, 0.02, 0.008, C.key, { r: 0.01, order: 1, pos: "-0.09 -0.012 0.007", cls: "clickable" });
-  UI.track.tmEnabled = on.enabled;
-  UI.knob = slab(UI.track, 0.014, 0.032, 0.008, C.text, { r: 0.007, order: 2, pos: "0 0 0.006" });
-  UI.track.addEventListener("click", (e) => {
-    if (!on.enabled() || !e.detail || !e.detail.intersection) return;
-    const lp = UI.track.object3D.worldToLocal(e.detail.intersection.point.clone());
-    setAmount(sliderValue(lp.x));
-  });
+  UI.pTitle = label(p, "", -0.095, 0.078, 0.006, 0.0092, C.dim);
+  UI.pAmount = label(p, "", -0.095, 0.042, 0.006, 0.026, C.text);
+  UI.pWin = label(p, "", -0.095, 0.008, 0.006, 0.0078, C.acc);
   [["+$1", 1], ["+$5", 5], ["+$25", 25]].forEach((q, i) =>
-    button(p, q[0], -0.199 + i * 0.073, -0.052, 0.066, 0.034, () => setAmount(state.amount + q[1]), on));
-  button(p, "Clear", 0.02, -0.052, 0.066, 0.034, () => setAmount(0), on);
-  button(p, "Cancel", -0.185, -0.094, 0.094, 0.036, closePanel, { enabled: on.enabled, r: 0.018 });
-  button(p, "Confirm", -0.045, -0.094, 0.17, 0.036, confirmPick, { enabled: on.enabled, r: 0.018, color: C.acc, ink: C.accInk, size: 0.0095 });
+    button(p, q[0], -0.205 + i * 0.07, -0.03, 0.064, 0.034, () => setAmount(state.amount + q[1]), { enabled: on.enabled, color: FIELD, r: 0.017 }));
+  button(p, "Clear", 0.005, -0.03, 0.064, 0.034, () => setAmount(0), { enabled: on.enabled, color: FIELD, r: 0.017 });
+  button(p, "Cancel", -0.19, -0.075, 0.094, 0.036, closePanel, { enabled: on.enabled, r: 0.018, color: FIELD });
+  button(p, "Confirm", -0.04, -0.075, 0.17, 0.036, confirmPick, { enabled: on.enabled, r: 0.018, color: C.acc, ink: C.accInk, size: 0.0095 });
+  slab(p, 0.0012, 0.17, 0.001, EDGE, { r: 0.0005, order: 1, opacity: 1, pos: "0.074 0 0.0045" });
   [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], [".", "0", "<"]].forEach((row, r) =>
-    row.forEach((k, c) => button(p, k, 0.118 + c * 0.047, 0.07 - r * 0.042, 0.043, 0.038, () => typeKey(k), on)));
+    row.forEach((k, c) => button(p, k, 0.12 + c * 0.047, 0.06 - r * 0.04, 0.043, 0.036, () => typeKey(k), { enabled: on.enabled, color: FIELD, r: 0.012 })));
 }
 
 /* ---------- what a market is ----------
@@ -1880,7 +1887,6 @@ function rowsTurned() { refresh(); last.game = Date.now(); pollOptions(viewOptio
 
 /* ---------- amount entry ---------- */
 const sliderMax = () => Math.max(1, Math.min(state.balance, LIVE.on ? LIVE.cap : 100));
-const sliderValue = (x) => Math.round(clamp(x / 0.29 + 0.5, 0, 1) * sliderMax());
 function setAmount(v, keepTyped) {
   state.amount = Math.round(clamp(v, 0, LIVE.on ? Math.min(state.balance, LIVE.cap) : state.balance) * 100) / 100;
   state.note = "";
@@ -2236,7 +2242,6 @@ function refreshPanel() {
   UI.pTitle.setAttribute("value", `${trunc(what, 30)}  ${pct(p)}`);
   UI.pAmount.setAttribute("value", state.typed !== "" ? "$" + state.typed : money(state.amount));
   UI.pWin.setAttribute("value", state.note ? state.note : state.amount > 0 ? `Risk ${money(state.amount)} to win ${money(state.amount / p)}` : "Choose an amount");
-  UI.knob.object3D.position.x = (clamp(state.amount / sliderMax(), 0, 1) - 0.5) * 0.29;
 }
 function refreshLobby() {
   const lay = lobbyLayout(), act = lay.act, st = curStore();
@@ -2458,7 +2463,9 @@ function refreshMarket() {
       const value = pos.shares * p, change = value - pos.stake, unit = pos.unit || (pos.unit = unitFor(pos.stake));
       pile.setScale(scaleFor(unit));
       pile.setCount(Math.max(1, value / unit), now);      // one bundle = `unit` dollars, so the mound's size is the value
-      pile.setLabel(pileText(i, value, change));
+      const msg = pileText(i, value, change);
+      if (msg) pile.setLabel(msg);
+      else pile.setValue(money(value), (change > -0.005 ? "+" : "-") + money(Math.abs(change)), change > -0.005, m.ticker + "|pile|" + i);
     } else { pile.setCount(0, now); pile.setLabel(""); }
   });
 }
@@ -2473,7 +2480,6 @@ function refresh() {
   refreshPanel();
   // hidden buttons must not catch mouse or pointer presses meant for what is behind them
   BUTTONS.forEach((b) => b.el.classList.toggle("clickable", !!b.enabled()));
-  UI.track.classList.toggle("clickable", state.sel !== null);
   PILES.forEach((p, i) => p.proxy.classList.toggle("clickable", !!pickAt(i) && state.sel === null));
 }
 
@@ -2510,7 +2516,7 @@ function pileText(i, value, change) {
   if (grab.i === i) return grab.over ? "Let go here to put it back" : "Let go to cash out " + money(value * pile.heldFrac) + simTag();
   if (performance.now() < armed[i]) return "Press again to cash out " + money(value) + simTag();
   if (hover.pct[i] > 0) return `Pinch to take ${money(value * hover.pct[i] / 100)}  (${hover.pct[i]}%)`;
-  return `${money(value)}  (${change > -0.005 ? "+" : "-"}${money(Math.abs(change))})`;
+  return null;                                     // nothing special: show the value and the gain or loss
 }
 function grabBegin(i, frac, point) {
   const pile = PILES[i];
@@ -2872,10 +2878,6 @@ window.TM = {
       const inside = Math.abs(lp.x) < b.w / 2 && Math.abs(lp.y) < b.h / 2 && lp.z > -0.02 && lp.z < b.d / 2 + 0.012;
       if (inside && !b.inside[hand] && !locked) press(b);
       b.inside[hand] = inside;
-    }
-    if (state.sel !== null && UI.track && !locked) {
-      const lp = UI.track.object3D.worldToLocal(vTmp.copy(tip));
-      if (Math.abs(lp.x) < 0.16 && Math.abs(lp.y) < 0.018 && lp.z > -0.015 && lp.z < 0.02) setAmount(sliderValue(lp.x));
     }
   }
 };
