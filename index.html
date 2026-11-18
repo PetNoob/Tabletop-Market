@@ -440,7 +440,7 @@ function stepPhysics(now) {
   let dt = Math.min(0.05, (now - phys.last) / 1000); phys.last = now;
   if (!(dt > 0)) return;
   const dtAll = dt, v0x = phys.vel.x, v0y = phys.vel.y, v0z = phys.vel.z;
-  const K = S.springStiffness, D = S.springDamping, steps = Math.ceil(dt / 0.008);
+  const K = phys.K || S.springStiffness, D = phys.D || S.springDamping, steps = Math.ceil(dt / 0.008);
   dt /= steps;
   for (let i = 0; i < steps; i++) {
     pv.copy(phys.target).sub(phys.pos).multiplyScalar(K).addScaledVector(phys.vel, -D);
@@ -977,6 +977,9 @@ function build() {
   // handle to move everything (always there)
   UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 0.008 0.25", rot: "-90 0 0", cls: "clickable" });
   UI.handle.setAttribute("id", "handle");
+  UI.followAt = mk("a-entity", { position: "0.145 0.008 0.25", rotation: "-60 0 0" }, market);
+  UI.followBtn = button(UI.followAt, "Follow", 0, 0, 0.08, 0.026, () => toggleFollow(), { size: 0.0062, r: 0.013, color: FIELD });
+  followLook();
 
   buildLobby(market);
   buildMarket(market);
@@ -1762,6 +1765,7 @@ function setStage(k) {
   if (UI.bar) UI.bar.object3D.visible = k < 0.5;
   // the grab handle: just under the category bar in the lobby, at the table's front edge in a market
   if (UI.handle) UI.handle.object3D.position.set(0, 0.008 - 0.014 * k, 0.25 + 0.025 * k);
+  if (UI.followAt) UI.followAt.object3D.position.set(0.145, 0.008 - 0.014 * k, 0.25 + 0.025 * k);
 }
 // opening a market: the list slides back and the table grows in, then the pressed card grows into the board
 function growIntoBoard(card, after) {
@@ -2697,13 +2701,75 @@ function stepPulse(now) {
   }
 }
 
+/* ---------- Follow: the dashboard keeps its place relative to you as you walk and turn ----------
+   Press "Follow" beside the grab bar. Where the dashboard is at that moment (distance, side, height, angle) is
+   remembered relative to your head. It is a lazy follow, like Quest windows: small glances and head bobs do not
+   move it; turn more than about 20 degrees or step about 15 cm away and it glides after you on a softer spring
+   (a little lag, overshoot and lean). Dragging the grab bar while following sets a new place to keep. */
+const FOLLOW = { on: false, dragging: false, off: new THREE.Vector3(), yawOff: 0, pos: new THREE.Vector3(), yaw: 0,
+                 turning: false, moving: false, last: 0 };
+const fv = new THREE.Vector3(), fq = new THREE.Quaternion(), fe = new THREE.Euler(), YAXIS = new THREE.Vector3(0, 1, 0);
+function headPose() {
+  const cam = document.querySelector("a-scene").camera;
+  if (!cam) return null;
+  cam.getWorldPosition(fv); cam.getWorldQuaternion(fq);
+  return { pos: fv.clone(), yaw: fe.setFromQuaternion(fq, "YXZ").y };
+}
+// remember where the dashboard is, measured from your head (turned so "straight ahead" is the same for both)
+function followCapture() {
+  const h = headPose();
+  if (!h) return false;
+  FOLLOW.pos.copy(h.pos); FOLLOW.yaw = h.yaw;
+  FOLLOW.off.copy(phys.target).sub(h.pos).applyAxisAngle(YAXIS, -h.yaw);
+  FOLLOW.yawOff = phys.targetYaw - h.yaw;
+  FOLLOW.turning = FOLLOW.moving = false;
+  return true;
+}
+function toggleFollow() {
+  FOLLOW.on = !FOLLOW.on && followCapture();
+  phys.K = FOLLOW.on ? 110 : 0; phys.D = FOLLOW.on ? 16 : 0;      // softer spring while following: it trails and settles
+  followLook();
+}
+function followLook() {
+  if (!UI.followBtn) return;
+  UI.followBtn.t.setAttribute("value", FOLLOW.on ? "Following" : "Follow");
+  UI.followBtn.t.setAttribute("color", FOLLOW.on ? C.acc : C.dim);
+  UI.followBtn.el.setColor(FOLLOW.on ? "#2b1d12" : FIELD);
+}
+// the grab bar was taken or let go: while following, letting go keeps the new place
+function followDrag(onNow) {
+  FOLLOW.dragging = onNow;
+  if (!onNow && FOLLOW.on) followCapture();
+}
+const wrapAngle = (a) => Math.atan2(Math.sin(a), Math.cos(a));
+function stepFollow(now) {
+  const dt = Math.min(0.05, Math.max(0.001, (now - (FOLLOW.last || now)) / 1000));
+  FOLLOW.last = now;
+  if (!FOLLOW.on || FOLLOW.dragging) return;
+  const h = headPose();
+  if (!h) return;
+  // turning: wait for a clear turn, then swing round until it is in front again
+  const dy = wrapAngle(h.yaw - FOLLOW.yaw);
+  if (Math.abs(dy) > 0.35) FOLLOW.turning = true;
+  if (FOLLOW.turning) { FOLLOW.yaw = wrapAngle(FOLLOW.yaw + dy * Math.min(1, dt * 3.2)); if (Math.abs(dy) < 0.03) FOLLOW.turning = false; }
+  // walking: wait for a clear step, then catch up; height follows gently (sitting down, standing up)
+  const dx = h.pos.x - FOLLOW.pos.x, dz = h.pos.z - FOLLOW.pos.z, d = Math.hypot(dx, dz);
+  if (d > 0.15) FOLLOW.moving = true;
+  if (FOLLOW.moving) { const k = Math.min(1, dt * 3); FOLLOW.pos.x += dx * k; FOLLOW.pos.z += dz * k; if (d < 0.02) FOLLOW.moving = false; }
+  const ddy = h.pos.y - FOLLOW.pos.y;
+  if (Math.abs(ddy) > 0.08) FOLLOW.pos.y += ddy * Math.min(1, dt * 2);
+  // where the dashboard should be now; the spring does the rest
+  phys.target.copy(FOLLOW.off).applyAxisAngle(YAXIS, FOLLOW.yaw).add(FOLLOW.pos);
+  phys.targetYaw = FOLLOW.yaw + FOLLOW.yawOff;
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
   state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); stepHands(now); },
+  frame: (now) => { stepFollow(now); stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); stepHands(now); },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
   hoverAt: (point, ray) => {
@@ -2730,7 +2796,7 @@ window.TM = {
   grabEnd: () => { if (grab.i >= 0) grabDone(!grab.over); },
   grabCancel: () => { if (grab.i >= 0) grabDone(false); },
   pileClicked,
-  setHandle: (onNow) => UI.handle && UI.handle.setColor(onNow ? C.acc : C.handle),
+  setHandle: (onNow) => { if (UI.handle) UI.handle.setColor(onNow ? C.acc : C.handle); followDrag(onNow); },
   // called every frame with the position of an index fingertip
   fingerAt: function (hand, tip) {
     const now = performance.now(), locked = now < state.lockUntil;
