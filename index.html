@@ -2485,9 +2485,7 @@ function aiSub(text, holdMs) {
   if (!UI.sayAt) return;
   clearTimeout(AI.hide);
   UI.sayAt.setAttribute("visible", true);
-  UI.sayText.setAttribute("value", trunc(String(text).split("
-").map(clean).join("
-"), 320));   // keep line breaks
+  UI.sayText.setAttribute("value", trunc(String(text).split(String.fromCharCode(10)).map(clean).join(String.fromCharCode(10)), 320));   // keep line breaks
   if (holdMs) AI.hide = setTimeout(() => UI.sayAt.setAttribute("visible", false), holdMs);
 }
 function orbPressed() {
