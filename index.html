@@ -108,7 +108,8 @@ const SETTINGS = {
   },
   liveBudget: 10,       // live mode only: shown until the real Gemini balance arrives (and used if the server cannot fetch it)
   oddsAnim: true,       // numbers slide up or down and flash green or red when the odds change
-  assistant: true,     // the talking orb (needs serverUrl, with Grok and ElevenLabs keys on the server)
+  assistant: true,
+  grokDebug: true,      // testing aid: a small note under Grok shows what he heard and any problem. Set false for the demo     // the talking orb (needs serverUrl, with Grok and ElevenLabs keys on the server)
   icons: true,          // show Gemini's market pictures (needs serverUrl, which passes them through)
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
@@ -2521,7 +2522,7 @@ function aiAudio() {
   if (AI.ctx.state === "suspended") AI.ctx.resume();
   return AI.ctx;
 }
-function aiMode(m) { AI.mode = m; if (m === "awake") AI.awakeT = performance.now(); }
+function aiMode(m) { AI.mode = m; AI.modeT = performance.now(); if (m === "awake") AI.awakeT = performance.now(); }
 function aiNote(text) {
   if (!UI.orbNote) return;
   clearTimeout(AI.noteT);
@@ -2636,8 +2637,9 @@ async function handleClip(blob) {
   if (!blob || blob.size < 1500) return;
   let heard = "";
   try { heard = String((await aiPost("/stt", blob, false)).text || "").trim(); }
-  catch (e) { console.warn("listening:", e.message); if (/not set up|429|Too many/i.test(e.message)) aiNote(e.message); return; }
-  if (!heard) return;
+  catch (e) { console.warn("listening:", e.message); aiNote("Couldn't hear: " + e.message); return; }
+  if (!heard) { if (S.grokDebug && AI.mode !== "sleep") aiNote("Heard nothing clear"); return; }
+  if (S.grokDebug && AI.mode !== "sleep") aiNote("Heard: " + heard + "  [" + AI.mode + "]");
   if (AI.mode === "sleep" || AI.mode === "speaking") return;
   if (AI.pending) return aiSpeak(aiConfirm(heard), "awake");
   const m = heard.match(WAKE);
@@ -2656,6 +2658,7 @@ function greetPrefetch() {
 }
 function playBuffer(buf, after) {
   const ctx = aiAudio(), src = ctx.createBufferSource();
+  if (ctx.state !== "running") ctx.resume();
   src.buffer = buf; src.playbackRate.value = 1.06;                      // a touch brighter and cuter
   src.connect(AI.outAn);
   AI.src = src;
@@ -2825,6 +2828,9 @@ function aiConfirm(heard) {
 // ---------- how he moves, every frame ----------
 function stepOrb(now) {
   if (!UI.orbAt) return;
+  // safety resets: never get stuck thinking, or "speaking" with no sound playing
+  if (AI.mode === "thinking" && now - AI.modeT > 20000) { AI.req = (AI.req || 0) + 1; aiMode("awake"); aiNote("That took too long, ask me again"); }
+  if (AI.mode === "speaking" && !AI.src && now - AI.modeT > 2000) aiMode("awake");
   const t = now / 1000, o = UI.orbAt.object3D, dt = Math.min(0.05, Math.max(0.001, (now - (AI.last || now)) / 1000));
   AI.last = now;
   // where he wants to be: just right of the table, a little above it

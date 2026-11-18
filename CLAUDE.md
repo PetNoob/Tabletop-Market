@@ -226,6 +226,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17 (UNTESTED; page start checked): Brian reported Grok answered once, then went blank when he interrupted to ask again; and the gloves had a faint white outline at every angle. Fixes: barge-in (`vadTick` keeps listening while he thinks or speaks; while speaking, your voice must beat floor*2 + 0.026 + 0.6 x his output level for 320 ms, then his audio stops and he listens); `aiAnswer` uses a request id so the newest question wins and older answers are dropped. Gloves: even dark grey (about 62 percent opaque) with a faint lighter top and a soft edge that fades (no white rim), smoother tubes and balls, fuller fingers, and a flattened ball filling the palm (sphere instance 25).
 
+- Nov 17: Grok opened the Michigan game by voice, then stared blankly at the next question. Cause unknown (candidates: hidden speech-to-text error such as ElevenLabs credit running out, stuck in thinking/speaking, or voice not detected). Added `SETTINGS.grokDebug` (true while testing; set false for the demo): a small note under Grok shows "Heard: ... [mode]" or the error; every listening error is now shown; safety resets in stepOrb (thinking over 20 s, or speaking with no audio source for 2 s, go back to awake); AudioContext resumed before playback.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
