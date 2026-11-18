@@ -2036,9 +2036,33 @@ async function loadCats() {
     cats = (Array.isArray(j) ? j : j.categories || []).map(clean).filter(Boolean);
   } catch (err) { console.warn("Gemini categories:", err); }
   state.catsFromGemini = cats.length > 0;
+  const savedCats = snapAll().__cats;
+  if (!cats.length && savedCats && Array.isArray(savedCats.cats)) cats = savedCats.cats.slice();
   if (!cats.length) cats = S.fallbackCategories.slice();
   state.cats = cats;
   selectCat(state.cats.includes(S.startCategory) ? S.startCategory : state.cats[0]);
+}
+// a safety net: the last real markets of each category are saved in this browser, and shown (labeled) when Gemini does not answer
+const SNAP_KEY = "tm-snap";
+function snapAll() { try { return JSON.parse(store.get(SNAP_KEY) || "{}") || {}; } catch (e) { return {}; } }
+function snapSave(cat, markets) {
+  if (cat.indexOf("search:") === 0 || !markets.length) return;
+  const all = snapAll();
+  all[cat] = { t: Date.now(), markets: markets.slice(0, 36).map((m) => ({
+    ticker: m.ticker, title: m.title, category: m.category, sub: m.sub, image: m.image, kind: m.kind, court: m.court, hoops: m.hoops,
+    sport: m.sport, start: m.start ? m.start.getTime() : 0, closes: m.closes ? m.closes.getTime() : 0, volume: m.volume, tags: m.tags,
+    opts: m.opts.map((o) => ({ name: o.name, color: o.color, price: o.price, sym: o.sym, bid: o.bid, ask: o.ask, closed: o.closed,
+                               image: o.image, abbr: o.abbr, side: o.side })) })) };
+  if (state.catsFromGemini) all.__cats = { t: Date.now(), cats: state.cats };
+  try { store.set(SNAP_KEY, JSON.stringify(all)); } catch (e) {}
+}
+// saved markets come back as markets again; "live" is switched off because a saved game may be over by now
+function snapLoad(cat) {
+  const s = snapAll()[cat];
+  if (!s || !Array.isArray(s.markets) || !s.markets.length) return null;
+  const date = (v) => (v ? new Date(v) : null);
+  return { t: s.t, markets: s.markets.map((m) => Object.assign({}, m, { start: date(m.start), closes: date(m.closes), live: false, saved: true,
+           sel: 0, rowPage: 0, opts: m.opts.map((o) => Object.assign({}, o, { hist: null })) })) };
 }
 // 2) the markets of one category, 12 at a time (more are fetched when you page forward)
 async function loadCat(cat, more) {
@@ -2065,12 +2089,18 @@ async function loadCat(cat, more) {
     });
     const keep = more ? st.markets.slice() : [];
     list.forEach((m) => { if (!keep.some((k) => k.ticker === m.ticker)) keep.push(m); });
-    st.markets = keep; st.source = "live"; st.raw = offset + raw;
+    st.markets = keep; st.source = "live"; st.raw = offset + raw; st.savedAt = 0;
+    snapSave(cat, keep);
     st.total = cat === "Live" ? (raw === 0 || !list.length ? keep.length : keep.length + 1) :
                raw === 0 || !j.pagination ? keep.length : Math.max(keep.length, j.pagination.total || 0);
   } catch (err) {
     console.warn("Gemini markets (" + cat + "):", err);
-    if (st.source !== "live") { st.source = "sample"; st.markets = sampleMarkets(); st.total = st.markets.length; }
+    if (st.source !== "live") {
+      const snap = snapLoad(cat);
+      if (snap) { st.source = "saved"; st.savedAt = snap.t; st.markets = snap.markets; }
+      else { st.source = "sample"; st.markets = sampleMarkets(); }
+      st.total = st.markets.length;
+    }
   }
   st.loading = false; st.loadedAt = Date.now();
   refresh(); updateWelcome();
@@ -2123,7 +2153,7 @@ function dataTick() {
     return;
   }
   if (!st || st.loading) return;
-  if (st.source === "sample" ? now - st.loadedAt > 60000 : ((state.scroll || 0) === 0 && now - st.loadedAt > S.lobbyRefreshSec * 1000)) loadCat(state.cat, false);
+  if (st.source !== "live" ? now - st.loadedAt > 60000 : ((state.scroll || 0) === 0 && now - st.loadedAt > S.lobbyRefreshSec * 1000)) loadCat(state.cat, false);
   else if (now - last.cards >= 15000) { last.cards = now; pollOptions(cardOptions()); }
 }
 
@@ -2191,7 +2221,8 @@ function refreshLobby() {
   UI.searchText.setAttribute("color", listening ? CY : state.searchQ ? C.text : C.dim);
   UI.sortBtn.t.setAttribute("value", "Sort: " + LOBBY_SORTS.find((s) => s[0] === (state.sort || "default"))[1]);
   UI.lStatus.setAttribute("value", act ? (LIVE.on ? "Your Gemini account" : "Test money") :
-                                   st.loading ? "Loading..." : st.source === "live" ? "Live from Gemini" : "Gemini down: samples, retrying");
+                                   st.loading ? "Loading..." : st.source === "live" ? "Live from Gemini" :
+                                   st.source === "saved" ? "Gemini down: saved " + shortTime(st.savedAt) : "Gemini down: samples, retrying");
   UI.lStatus.setAttribute("color", act ? (LIVE.on ? C.green : C.dim) : st.loading ? C.dim : st.source === "live" ? C.green : C.red);
   // lay out the rows that fit, from the current scroll position
   const F = UI.feat;
@@ -2344,7 +2375,7 @@ function refreshMarket() {
     UI.sbScore.setAttribute("value", sc && sc.state !== "pre" ? `${sc.a}-${sc.b}` : "vs");
   }
   UI.status.setAttribute("value", state.sim ? "Simulated odds (demo, not real)" : LIVE.on ? "LIVE: real orders on Gemini" :
-                                  live ? "Live odds from Gemini" : "Sample odds");
+                                  live ? "Live odds from Gemini" : m.saved ? "Saved odds (Gemini down), prices still update" : "Sample odds");
   UI.status.setAttribute("color", !state.sim && live ? C.green : C.dim);
   UI.simBtn.t.setAttribute("value", LIVE.on ? "Live: no simulation" : state.sim ? "Stop simulation" : "Simulate odds");
   // footer
@@ -2722,7 +2753,8 @@ function updateWelcome() {
   const el = document.getElementById("wStatus"), st = curStore();
   el.className = st.source === "live" ? "live" : "";
   el.textContent = st.source === "live" ? `${st.total} ${state.cat} markets open, live from Gemini`
-                 : st.source === "sample" ? "Could not reach Gemini. Showing sample markets." : "Loading markets from Gemini...";
+                 : st.source === "sample" ? "Could not reach Gemini. Showing sample markets." :
+                   st.source === "saved" ? "Gemini is not answering. Showing the markets saved " + shortTime(st.savedAt) + "." : "Loading markets from Gemini...";
 }
 function closeWelcome() {
   welcome.style.display = "none";
