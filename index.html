@@ -158,6 +158,7 @@ AFRAME.registerComponent("xr-input", {
     this.tmp2 = new THREE.Vector3();
     this.drag = null;
     this.carry = null;          // a cash pile being carried
+    this.resize = null;         // the corner grip being pulled
     this.pinch = {}; this.pinchSeen = {};
     this.tips = {};
     // pointer lines for controllers
@@ -205,7 +206,7 @@ AFRAME.registerComponent("xr-input", {
     return true;
   },
   onSelect: function (e) {
-    if (this.drag || this.carry) return;      // letting go of something is not a press
+    if (this.drag || this.carry || this.resize) return;      // letting go of something is not a press
     if (!this.rayFrom(e.frame, e.inputSource)) return;
     const targets = Array.from(document.querySelectorAll(".clickable")).map((el) => el.object3D);
     const hits = this.ray.intersectObjects(targets, true);
@@ -221,6 +222,12 @@ AFRAME.registerComponent("xr-input", {
   onStart: function (e) {
     const handle = document.getElementById("handle"), market = document.getElementById("market");
     if (!handle || !market || !this.rayFrom(e.frame, e.inputSource)) return;
+    if (window.TM && window.TM.resizeStart) {         // the corner grip comes first: it sits on the panel's edge
+      const h = e.inputSource.hand ? e.inputSource.handedness : null;
+      const pt = h && this.pinchSeen[h] ? this.pinch[h] : null;
+      const d = window.TM.resizeStart(pt, pt ? null : this.ray);
+      if (d !== null) { this.resize = { src: e.inputSource, hand: h, usePinch: !!pt, dist: d }; return; }
+    }
     let grab = this.ray.intersectObject(handle.object3D, true).length > 0;
     const tip = this.tips[e.inputSource.handedness];
     if (!grab && e.inputSource.hand && tip) {
@@ -245,6 +252,7 @@ AFRAME.registerComponent("xr-input", {
       if (window.TM) window.TM.setHandle(false);
     }
     if (this.carry && this.carry.src === e.inputSource) { this.carry = null; window.TM.grabEnd(); }
+    if (this.resize && this.resize.src === e.inputSource) { this.resize = null; window.TM.resizeEnd(); }
   },
   tick: function () {
     const sceneEl = this.el, xr = sceneEl.renderer && sceneEl.renderer.xr;
@@ -294,6 +302,13 @@ AFRAME.registerComponent("xr-input", {
         sceneEl.camera.getWorldPosition(this.tmp2);
         window.TM.setTarget(this.tmp, Math.atan2(this.tmp2.x - this.tmp.x, this.tmp2.z - this.tmp.z));
       }
+    }
+    if (this.resize) {
+      let live = false;
+      if (session) for (const src of session.inputSources) if (src === this.resize.src) live = true;
+      if (!live) { this.resize = null; window.TM.resizeEnd(); }
+      else if (this.resize.usePinch) { if (this.pinchSeen[this.resize.hand]) window.TM.resizeMove(this.pinch[this.resize.hand]); }
+      else if (this.rayFrom(frame, this.resize.src)) window.TM.resizeMove(this.tmp.copy(this.origin).addScaledVector(this.dir, this.resize.dist));
     }
     if (this.carry) {
       let live = false;
@@ -611,7 +626,7 @@ function makePile(parent, x, z) {
     // a fingertip pushes nearby notes away
     poke: function (worldPoint) {
       if (!bills.length) return;
-      const lay = layout(pile.moundCount()), k = pile.scale * S.courtScale, r = 0.03 / k;
+      const lay = layout(pile.moundCount()), k = pile.scale * rootScale(), r = 0.03 / k;
       group.worldToLocal(lp.copy(worldPoint));
       if (Math.hypot(lp.x, lp.z) > lay.R + r || lp.y > lay.H + r || lp.y < -r) return;
       for (const b of bills) {
@@ -947,7 +962,9 @@ function makeGraph(parent, x, y, w, h) {
 /* ---------- build everything ---------- */
 function build() {
   const market = document.getElementById("market");
-  market.setAttribute("scale", `${S.courtScale} ${S.courtScale} ${S.courtScale}`);
+  const savedScale = parseFloat(store.get("tm-scale"));
+  UI.scale = savedScale >= 0.6 && savedScale <= 1.8 ? savedScale : S.courtScale;
+  market.setAttribute("scale", `${UI.scale} ${UI.scale} ${UI.scale}`);
   phys.target.set(0, S.tableHeight, -S.distance); phys.pos.copy(phys.target);
   phys.last = performance.now(); phys.ready = true;
   market.object3D.position.copy(phys.pos);
@@ -1105,6 +1122,7 @@ function buildLobby(market) {
   // start where the lobby belongs (A-Frame applies this a moment after creation, so it must be the lobby spot, not the board)
   const L = UI.lobby = mk("a-entity", { position: `0 ${STAGE_LOBBY.y} ${STAGE_LOBBY.z}`, rotation: `${STAGE_LOBBY.rx} 0 0` }, market);
   slab(L, LW, LH, 0.008, PANEL_BG, { r: 0.028, opacity: 0.97 });
+  UI.sizerL = makeSizer(L, LW / 2, LH / 2);
   // header (stays put while the content scrolls)
   UI.lTitle = label(L, "Tabletop Market", -0.355, 0.212, 0.006, 0.0102, C.text, "left");
   UI.search = button(L, "", -0.105, 0.212, 0.17, 0.028, () => searchPress(),
@@ -1602,6 +1620,7 @@ function buildMarket(market) {
   // header (back, picture, title), live line between two rules, scoreboard (games), wide chart, footer with chart ranges
   const B = mk("a-entity", { position: BOARD_POS, rotation: "-18 0 0" }, G);
   slab(B, LW, LH, 0.008, PANEL_BG, { r: 0.028, opacity: 0.97 });
+  UI.sizerB = makeSizer(B, LW / 2, LH / 2);
   UI.boardBack = button(B, "< Back", -0.322, 0.205, 0.07, 0.032, backToLobby,
                         { size: 0.0064, r: 0.016, color: FIELD, enabled: () => inMarket() && !UI.trans });
   UI.titleIcon = iconMesh(B, 0.036, -0.262, 0.205, 0.0065);
@@ -2763,10 +2782,55 @@ function stepFollow(now) {
   phys.targetYaw = FOLLOW.yaw + FOLLOW.yawOff;
 }
 
+/* ---------- resize: pull the grip on the dashboard's top-right corner ----------
+   Pinch it (or point and pull the trigger) and drag: away from the table = bigger, toward it = smaller.
+   Everything scales together (dashboard, table, cash, Grok's spot), from 0.6x to 1.8x, and the size is remembered. */
+const SIZE = { on: false, s0: 1, d0: 1, o: new THREE.Vector3(), grip: null };
+const rootScale = () => UI.scale || S.courtScale;
+function makeSizer(parent, x, y) {
+  const g = mk("a-entity", { position: `${x - 0.012} ${y - 0.012} 0.006` }, parent);
+  const arms = [slab(g, 0.034, 0.005, 0.004, "#59636f", { r: 0.0025, order: 3, opacity: 1, pos: "-0.008 0.009 0" }),
+                slab(g, 0.005, 0.034, 0.004, "#59636f", { r: 0.0025, order: 3, opacity: 1, pos: "0.009 -0.008 0" })];
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(0.03, 10, 8), new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+  g.object3D.add(hit);
+  g.tmArms = arms;
+  return g;
+}
+function sizerLook(g, on) { if (g) g.tmArms.forEach((a) => a.setColor(on ? C.acc : "#59636f")); }
+const activeSizer = () => (UI.trans ? null : inMarket() ? UI.sizerB : inLobby() ? UI.sizerL : null);
+function setScale(s) {
+  UI.scale = s;
+  const mk2 = document.getElementById("market");
+  if (mk2) mk2.object3D.scale.setScalar(s);
+}
+// returns null if this pinch or pointer is not on the grip; otherwise how far along the pointer it is (0 for a pinch)
+function resizeStart(point, ray) {
+  const g = activeSizer();
+  if (!g || SIZE.on) return null;
+  const w = g.object3D.getWorldPosition(new THREE.Vector3());
+  let p, dist = 0;
+  if (point) { if (point.distanceTo(w) > 0.045) return null; p = point.clone(); }
+  else { if (!ray || !ray.intersectObject(g.object3D, true).length) return null; dist = ray.ray.origin.distanceTo(w); p = w; }
+  SIZE.on = true; SIZE.grip = g; SIZE.s0 = rootScale(); SIZE.o.copy(phys.pos);
+  SIZE.d0 = Math.max(0.05, p.distanceTo(SIZE.o));
+  sizerLook(g, true);
+  return dist;
+}
+function resizeMove(p) {
+  if (!SIZE.on) return;
+  setScale(clamp(SIZE.s0 * p.distanceTo(SIZE.o) / SIZE.d0, 0.6, 1.8));
+}
+function resizeEnd() {
+  if (!SIZE.on) return;
+  SIZE.on = false; sizerLook(SIZE.grip, false);
+  store.set("tm-scale", String(rootScale().toFixed(3)));
+  if (FOLLOW.on) followCapture();
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
+  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => { stepFollow(now); stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); stepHands(now); },
