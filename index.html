@@ -2577,6 +2577,7 @@ function pileText(i, value, change) {
 function grabBegin(i, frac, point) {
   const pile = PILES[i];
   if (!pickAt(i) || !pile.count()) return false;
+  sfx("pick", 0.4, 0.9);                                                                    // picking the cash up: the pick chime, a touch lower
   grab.i = i; grab.over = true;
   pile.setLit(0); pile.hold(frac, point || pileCenter(i).clone());
   UI.wallet.setColor(C.walletOn);
@@ -2587,7 +2588,7 @@ function grabBegin(i, frac, point) {
 function settleCash(i, frac, proceeds, ref) {
   const pile = PILES[i], p = pickAt(i);
   if (!p) return;
-  if (performance.now() - (SFX.cashT || 0) > 2000) { SFX.cashT = performance.now(); sfx("chaching", 0.55); }   // same as Add money, once
+  if (performance.now() - (SFX.cashT || 0) > 2000) { SFX.cashT = performance.now(); sfx("pick", 0.55); }   // the same soft chime as placing a pick
   logActivity({ side: "Sold", title: p.pos.title || (state.market && state.market.title) || "", what: (p.pos.what || "") + " " + Math.max(1, Math.round(frac * 100)) + "%",
                 amount: proceeds, ticker: state.market && state.market.ticker, ref, sim: state.sim });
   setTimeout(saveTestState, 0);
