@@ -11,43 +11,44 @@
   #note { position: fixed; left: 12px; top: 12px; z-index: 10; background: rgba(20,22,26,.92);
           color: #e9edf2; padding: 10px 14px; border-radius: 10px; font-size: 13px; max-width: 330px;
           line-height: 1.45; border: 1px solid #2c3037; display: none; }
-  #note b { color: #2fbf71; }
+  #note b { color: #ff8c32; }
 
   /* welcome screen */
   #welcome { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center;
-             background: radial-gradient(ellipse at 50% 35%, #1d2026 0%, #0f1114 70%); color: #f2f4f7; }
+             background: radial-gradient(ellipse at 50% 30%, #2a1d13 0%, #141110 38%, #0d0e10 72%); color: #f2f4f7; }
   #welcome .card { width: min(440px, 86vw); text-align: center; padding: 8px; }
-  #welcome .mark { width: 132px; height: 72px; margin: 0 auto 26px; border: 2px solid #4d535d; border-radius: 6px;
+  #welcome .mark { width: 132px; height: 72px; margin: 0 auto 26px; border: 2px solid #ff8c32; border-radius: 6px;
                    position: relative; background: #202328; box-shadow: 0 10px 0 -4px #15171a, 0 22px 40px rgba(0,0,0,.5); }
   #welcome .mark::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 2px;
-                           margin-left: -1px; background: #4d535d; }
+                           margin-left: -1px; background: #ff8c32; }
   #welcome .mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
-                          margin: -13px 0 0 -13px; border: 2px solid #4d535d; border-radius: 50%; }
+                          margin: -13px 0 0 -13px; border: 2px solid #ff8c32; border-radius: 50%; }
   #welcome .mark i { position: absolute; right: 14px; bottom: 100%; width: 26px; height: 14px; background: #2fbf71;
                      border-radius: 2px; box-shadow: 0 -6px 0 -1px #25a05d, 0 -12px 0 -2px #3bd184; margin-bottom: -40px; }
   #welcome h1 { font-size: 34px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 8px; }
   #welcome .pitch { font-size: 16px; color: #aab1bb; margin: 0 0 30px; line-height: 1.45; }
   #welcome button { font: inherit; cursor: pointer; border-radius: 12px; display: block; width: 100%; }
-  #enterBtn { background: #2fbf71; color: #06210f; border: 0; font-size: 19px; font-weight: 650; padding: 16px; }
-  #enterBtn:hover { background: #3bd184; }
+  #enterBtn { background: #ff8c32; color: #1f0e00; border: 0; font-size: 19px; font-weight: 650; padding: 16px;
+              box-shadow: 0 8px 28px rgba(255,140,50,.22); }
+  #enterBtn:hover { background: #ffa04f; }
   #windowBtn { background: transparent; color: #aab1bb; border: 1px solid #2c3037; font-size: 14px;
                padding: 11px; margin-top: 10px; }
-  #windowBtn:hover { color: #f2f4f7; border-color: #4d535d; }
+  #windowBtn:hover { color: #f2f4f7; border-color: #ff8c32; }
   #liveBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 8px; margin-top: 6px; }
-  #liveBtn.on { color: #2fbf71; }
+  #liveBtn.on { color: #ff8c32; }
   #voiceBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 6px; margin-top: 0; }
-  #voiceBtn.on { color: #2fbf71; }
+  #voiceBtn.on { color: #ff8c32; }
   #arcBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 6px; margin-top: 0; }
   #arcPanel { text-align: left; font-size: 12.5px; color: #c9cfd6; background: #15171a; border: 1px solid #2c3037;
               border-radius: 10px; padding: 12px 14px; margin-top: 6px; max-height: 42vh; overflow: auto; line-height: 1.5; }
-  #arcPanel a { color: #2fbf71; }
+  #arcPanel a { color: #ff9f55; }
   #arcPanel .row { margin-bottom: 9px; }
   #arcPanel .mono { font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; word-break: break-all; }
   #arcPanel button { width: auto; display: inline-block; background: #2b2f36; color: #f2f4f7; border: 0; border-radius: 7px;
                      font-size: 12px; padding: 4px 10px; margin: 4px 8px 0 0; }
   #arcPanel .r { font-size: 11.5px; color: #8d95a0; border-top: 1px solid #23262b; padding-top: 5px; margin-top: 5px; }
   #wStatus { font-size: 13px; color: #8d95a0; margin: 22px 0 6px; min-height: 18px; }
-  #wStatus.live { color: #2fbf71; }
+  #wStatus.live { color: #ff9f55; }
   #welcome .fine { font-size: 12px; color: #6f7782; line-height: 1.5; margin: 0; }
   /* hide A-Frame's own small enter buttons while the welcome screen is up */
   body.welcome .a-enter-vr, body.welcome .a-enter-ar { display: none !important; }
@@ -86,7 +87,7 @@
    ====================================================================== */
 const SETTINGS = {
   tableHeight:  0.75,   // height of your table from the floor (0.75 m is about 30 inches)
-  distance:     0.67,   // how far in front of you it first appears
+  distance:     0.58,   // how far in front of you it first appears
   courtScale:   1.0,    // 1.0 = court is 60 cm long. 1.5 = bigger, 0.7 = smaller
   startBalance: 100,    // test balance in dollars
   interestRate: 4.1,    // shown on the balance card (preview only)
@@ -1078,7 +1079,7 @@ const CTOP = 0.19, CBOT = -0.228, CX0 = -0.355, CW = 0.68;    // the scrolling a
 const GAP = 0.008, COLS = 3, CARD_W = (CW - 2 * 0.01) / 3, CARD_H = 0.098;
 const FEAT_H = CTOP - CBOT - 2 * CARD_H - 2 * GAP;            // featured card + two rows of cards fill the area exactly
 const CXM = CX0 + CW / 2;
-const CY = "#3fe0d0", YE = "#ffcf3a";                          // cyan and yellow: the featured card's two answers
+const ACC = "#ff8c32", ACC2 = "#e6e9ee";                       // accent orange (like Gemini), and off-white for a second answer
 const PANEL_BG = "#101215", CARD_BG = "#1a1d22", EDGE = "#2c3038", FIELD = "#1d2025";
 const LOBBY_SORTS = [["default", "Top"], ["volume", "Volume"], ["soon", "Soonest"]];
 const CAT_ORDER = ["Sports", "Crypto", "Commodities", "Economics", "Politics", "Tech", "Business", "Weather", "Culture"];
@@ -1132,7 +1133,7 @@ function buildLobby(market) {
       row.name = label(g, "", -0.1, 0, z, 0.0066, "#e3e7ec", "left");
       row.box = slab(g, 0.024, 0.018, 0.002, "#2a2e35", { r: 0.004, order: 2, opacity: 1, pos: `0.036 0 ${z}` });
       row.score = label(row.box, "", 0, 0, 0.0015, 0.0062, C.text);
-      row.pill = slab(g, 0.052, 0.022, 0.002, CY, { r: 0.011, order: 2, opacity: 0.85, pos: `0.077 0 ${z}` });
+      row.pill = slab(g, 0.052, 0.022, 0.002, ACC, { r: 0.011, order: 2, opacity: 0.85, pos: `0.077 0 ${z}` });
       slab(row.pill, 0.048, 0.018, 0.002, "#15181c", { r: 0.009, order: 3, opacity: 1, pos: "0 0 0.0008" });
       row.pct = tickerLabel(g, 0.096, 0, z + 0.0025, 0.0082, C.text, "right");
       return row;
@@ -1166,7 +1167,7 @@ function buildFeatured(parent) {
   F.title = label(el, "", -0.283, 0.072, z, 0.0102, C.text, "left", 0.27, "top");
   F.status = label(el, "", -0.283, 0.026, z, 0.0066, C.dim, "left");
   F.opts = [0, 1].map((k) => button(el, "", -0.252 + k * 0.158, -0.012, 0.148, 0.05, () => featPick(k),
-    { size: 0.0084, r: 0.014, color: k ? YE : CY, ink: "#0b0d10", opacity: 1,
+    { size: 0.0084, r: 0.014, color: k ? ACC2 : ACC, ink: "#0b0d10", opacity: 1,
       enabled: () => inLobby() && !state.activity && F.on && F.inside && !!(F.m && F.m.opts[k]) }));
   F.mine = label(el, "", -0.33, -0.056, z, 0.0064, C.green, "left");
   F.foot = label(el, "", -0.33, -0.084, z, 0.0054, C.dim, "left");
@@ -1174,7 +1175,7 @@ function buildFeatured(parent) {
   F.clock = label(el, "", 0.165, 0.086, z, 0.0062, C.dim);
   F.score = label(el, "", 0.165, 0.064, z, 0.0112, C.text);
   F.graph = makeGraph(el, 0.165, -0.018, 0.32, 0.118);
-  F.legend = [0, 1].map((k) => label(el, "", 0.008 + k * 0.165, -0.089, z, 0.0062, k ? YE : CY, "left"));
+  F.legend = [0, 1].map((k) => label(el, "", 0.008 + k * 0.165, -0.089, z, 0.0062, k ? ACC2 : ACC, "left"));
 }
 function featPick(k) {
   const m = UI.feat.m;
@@ -1196,7 +1197,7 @@ function buildBar(L) {
     const tab = { id: "", on: false };
     tab.b = button(bar, "", 0, 0, 0.06, 0.03, () => barPick(tab),
                    { size: 0.0076, r: 0.015, color: "#0c0e11", opacity: 1, enabled: () => inLobby() && tab.on });
-    tab.line = slab(tab.b.el, 0.04, 0.0026, 0.001, CY, { r: 0.0013, order: 3, opacity: 1, pos: `0 -0.0118 ${tab.b.tz}` });
+    tab.line = slab(tab.b.el, 0.04, 0.0026, 0.001, ACC, { r: 0.0013, order: 3, opacity: 1, pos: `0 -0.0118 ${tab.b.tz}` });
     tab.dot = new THREE.Mesh(new THREE.CircleGeometry(0.0028, 16), new THREE.MeshBasicMaterial({ color: C.red }));
     tab.dot.renderOrder = 5; tab.dot.position.z = tab.b.tz; tab.b.el.object3D.add(tab.dot);
     tab.b.el.object3D.visible = false;
@@ -1245,7 +1246,7 @@ function refreshBar() {
     tab.b.t.setAttribute("value", it[1]);
     tab.b.t.object3D.position.x = dot ? 0.006 : 0;
     tab.b.t.setAttribute("color", on ? C.text : C.dim);
-    tab.b.el.setColor(on ? "#16292a" : "#0c0e11");
+    tab.b.el.setColor(on ? "#2b1d12" : "#0c0e11");
     tab.line.object3D.visible = on; tab.line.object3D.scale.x = (w - 0.024) / 0.04;
     tab.dot.visible = dot; tab.dot.position.x = -textWidth(it[1], size) / 2 - 0.002;
   });
@@ -1745,7 +1746,7 @@ function openMarket(m) {
 }
 // the card you pressed lifts off and grows into the board; then it fades and the market is underneath
 const COURT_SCALE = 0.85;   // size of the table and court (1 = original)
-const STAGE_LOBBY = { y: 0.30, z: 0.0, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
+const STAGE_LOBBY = { y: 0.30, z: 0.08, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
 function setStage(k) {
   state.stage = k;
   const mix = (a, b) => a + (b - a) * k, o = UI.lobby.object3D;
@@ -2218,7 +2219,7 @@ function refreshLobby() {
   UI.searchX.el.object3D.visible = !act && !!state.searchQ;
   const listening = AI.searchNext && performance.now() - AI.searchNext < 30000;
   UI.searchText.setAttribute("value", listening ? "Listening: say what to find" : state.searchQ ? '"' + trunc(state.searchQ, 22) + '"' : "Search events (say it)");
-  UI.searchText.setAttribute("color", listening ? CY : state.searchQ ? C.text : C.dim);
+  UI.searchText.setAttribute("color", listening ? ACC : state.searchQ ? C.text : C.dim);
   UI.sortBtn.t.setAttribute("value", "Sort: " + LOBBY_SORTS.find((s) => s[0] === (state.sort || "default"))[1]);
   UI.lStatus.setAttribute("value", act ? (LIVE.on ? "Your Gemini account" : "Test money") :
                                    st.loading ? "Loading..." : st.source === "live" ? "Live from Gemini" :
@@ -2262,7 +2263,7 @@ function fillFeatured(m) {
   F.status.setAttribute("color", live ? C.red : C.dim);
   F.livePulse = live;
   const two = m.opts.slice(0, 2);
-  const cols = two.map((o, k) => (m.kind === "duel" && o.color ? o.color : k ? YE : CY));
+  const cols = two.map((o, k) => (m.kind === "duel" && o.color ? o.color : k ? ACC2 : ACC));
   F.opts.forEach((b, k) => {
     const o = two[k];
     b.el.object3D.visible = !!o;
@@ -2286,7 +2287,7 @@ function fillFeatured(m) {
     F.score.setAttribute("value", trunc(two[0].name, 20) + "  " + pct(two[0].price));
   }
   F.clockLive = !!(sc && sc.state === "in");
-  // the two answers' price history, cyan and yellow, with matching labels underneath
+  // the two answers' price history, orange and off-white (team colors for games), with matching labels underneath
   two.forEach((o) => { if (o.sym && !o.hist) loadHist(o); });
   const waiting = two.some((o) => o.sym && (!o.hist || !o.hist.loaded));
   F.graph.set(two.map((o, k) => ({ color: cols[k], pts: o.hist && o.hist.loaded ? o.hist.pts : [] })),
