@@ -4145,7 +4145,13 @@ function sfxLoad() {
 }
 function sfx(name, vol, rate) {
   const b = SFX.buf[name];
-  if (!b || !AI.ctx) return;
+  if (!b) {                                                                                 // not loaded (yet): try again, at most every 5 s
+    const now = performance.now();
+    if (!SFX.loading[name] && now - (SFX.retry || 0) > 5000) { SFX.retry = now; sfxLoad(); }
+    return;
+  }
+  if (!AI.ctx) return;
+  if (AI.ctx.state === "suspended") AI.ctx.resume();
   const now = performance.now();
   if (now - (SFX.last[name] || 0) < 45) return;
   SFX.last[name] = now;
@@ -4225,6 +4231,8 @@ function closeWelcome() {
   document.body.classList.remove("welcome");
   if (!scene.is("vr-mode") && !scene.is("ar-mode")) note.style.display = "block";
 }
+// the first press anywhere also starts the sounds loading (browsers allow sound only after a press)
+window.addEventListener("pointerdown", () => { try { sfxLoad(); } catch (e) {} }, { once: true });
 // a headset that supports mixed reality gets "Enter" = step into AR. Other screens just open the scene.
 if (navigator.xr && navigator.xr.isSessionSupported) {
   navigator.xr.isSessionSupported("immersive-ar").then((ok) => { arReady = !!ok; showEnterChoices(); }).catch(showEnterChoices);
