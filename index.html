@@ -267,6 +267,7 @@ AFRAME.registerComponent("xr-input", {
             });
             H.geo.attributes.position.needsUpdate = true;
             H.group.visible = SETTINGS.handStyle === "outline"; hi++;
+            if (window.TM && window.TM.drawGlove) window.TM.drawGlove(hi - 1, H.joints);
             this.tips[src.handedness] = H.joints[9].clone();
             if (window.TM) window.TM.fingerAt(src.handedness, H.joints[9]);
             // pinch point = halfway between thumb tip and index tip
@@ -295,7 +296,7 @@ AFRAME.registerComponent("xr-input", {
       else if (this.rayFrom(frame, this.carry.src)) window.TM.grabMove(this.tmp.copy(this.origin).addScaledVector(this.dir, this.carry.dist));
     }
     for (; li < 2; li++) this.lines[li].visible = false;
-    for (; hi < 2; hi++) this.hands[hi].group.visible = false;
+    for (; hi < 2; hi++) { this.hands[hi].group.visible = false; if (window.TM && window.TM.drawGlove) window.TM.drawGlove(hi, null); }
     if (window.TM) window.TM.frame(performance.now());
   }
 });
@@ -403,8 +404,10 @@ function press(b, e) {
   const now = performance.now();
   if (!b.enabled() || now - b.last < 350) return;
   b.last = now;
-  b.el.object3D.position.z = b.z - 0.004;
-  setTimeout(() => { b.el.object3D.position.z = b.z; }, 130);
+  if (!b.noPush) {
+    b.el.object3D.position.z = b.z - 0.004;
+    setTimeout(() => { b.el.object3D.position.z = b.z; }, 130);
+  }
   shove(0, 0, -0.02, 0);                    // a press gives the whole thing a tiny push
   b.onPress(e);
 }
@@ -976,11 +979,7 @@ function build() {
   UI.ghost.setAttribute("visible", false);
   buildOrb(market);
 
-  // glove-style hands: A-Frame's built-in hand model, drawn see-through over your real hands
-  if (S.handStyle === "glove") ["left", "right"].forEach((h) => {
-    const el = mk("a-entity", { "hand-tracking-controls": `hand: ${h}; modelStyle: mesh` }, market.sceneEl);
-    el.addEventListener("object3dset", () => setTimeout(() => { try { styleGlove(el); } catch (err) { console.warn("glove:", err); } }, 0));
-  });
+  // glove-style hands are drawn from the tracked joints each frame (see drawGlove)
 
   // computer screens: tilt the view down toward the table
   const lc = document.getElementById("cam").components["look-controls"];
@@ -2060,7 +2059,7 @@ function stepPulse(now) {
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove,
+  state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); },
@@ -2135,11 +2134,11 @@ function showEnterChoices() {
   windowBtn.style.display = arReady ? "block" : "none";
 }
 enterBtn.addEventListener("click", () => {
-  try { aiAudio(); } catch (e) {}
+  try { aiAudio(); if (store.get("tm-voice") === "1") wakeStart(); } catch (e) {}
   closeWelcome();
   if (arReady && scene.enterAR) Promise.resolve(scene.enterAR()).catch((err) => console.warn("AR did not start:", err));
 });
-windowBtn.addEventListener("click", () => { try { aiAudio(); } catch (e) {} closeWelcome(); });
+windowBtn.addEventListener("click", () => { try { aiAudio(); if (store.get("tm-voice") === "1") wakeStart(); } catch (e) {} closeWelcome(); });
 // owner only: type the passcode to switch from test money to real Gemini orders
 const liveBtn = document.getElementById("liveBtn");
 if (S.serverUrl) liveBtn.style.display = "block";
@@ -2429,42 +2428,87 @@ arcPanel.addEventListener("click", (ev) => {
                .finally(() => { ARC.deploying = false; arcShow(); });
   }
 });
-/* ---------- the voice assistant: a glowing orb on the table ----------
-   Press the orb, speak, press it again (or wait 8 seconds). The app records your voice, the server turns it into
-   text (ElevenLabs), asks Grok with what is on the table right now, and the answer is spoken back (ElevenLabs)
-   and shown as a subtitle. It explains markets and moves around the app; it never recommends a bet. */
-const AI = { mode: "idle", ready: null, lvl: 0, buf: null };
-const ORB_COLOR = { idle: 0x2fbf71, listening: 0xf2f4f7, thinking: 0xf5b942, speaking: 0x3bd184 };
-function glowTexture() {
-  const cv = document.createElement("canvas"); cv.width = cv.height = 64;
-  const g = cv.getContext("2d"), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  gr.addColorStop(0, "rgba(255,255,255,0.9)"); gr.addColorStop(0.4, "rgba(255,255,255,0.35)"); gr.addColorStop(1, "rgba(255,255,255,0)");
-  g.fillStyle = gr; g.fillRect(0, 0, 64, 64);
-  return new THREE.CanvasTexture(cv);
+/* ---------- Grok: a little floating flame-spirit on your table ----------
+   Say "Hey Grok": he answers "Hey!", "Yeah?" or "What's up?" and listens. Ask your question; it goes to the server
+   as audio (ElevenLabs turns it into text), Grok answers with what is on the table right now, and the answer is
+   spoken back in ElevenLabs' voice. "Hey Grok, why is Boston up?" in one breath works too. Tapping him also wakes him.
+   He explains markets and moves around the app; he never recommends a bet and never touches money.
+   Listening: the microphone stays on; a simple loudness check cuts out each sentence and only sentences are sent. */
+const AI = { mode: "sleep", ready: null, lvl: 0, buf: null, listening: false, floor: 0.02, greet: [], placed: false, last: 0,
+             nextBlink: 0, blinkT: -1e9, hopT: -1e9 };
+const WAKE = /\b(hey|hi|hay|ok|okay|yo|a)\W{0,3}(grok|grock|groc|grog|groke|growk|brock|crock|rock|grow)\b/i;
+const GREETINGS = ["Hey!", "Yeah?", "What's up?"];
+const gv3 = new THREE.Vector3(), gv4 = new THREE.Vector3(), gv5 = new THREE.Vector3(), gq1 = new THREE.Quaternion();
+const NOISE_GLSL = [
+  "float hash3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }",
+  "float noise3(vec3 x){ vec3 i = floor(x); vec3 f = fract(x); f = f * f * (3.0 - 2.0 * f);",
+  "  return mix(mix(mix(hash3(i), hash3(i + vec3(1.0, 0.0, 0.0)), f.x), mix(hash3(i + vec3(0.0, 1.0, 0.0)), hash3(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),",
+  "             mix(mix(hash3(i + vec3(0.0, 0.0, 1.0)), hash3(i + vec3(1.0, 0.0, 1.0)), f.x), mix(hash3(i + vec3(0.0, 1.0, 1.0)), hash3(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z); }"
+].join("\n");
+// a see-through dark grey flame: the surface wobbles upward, the top stretches and trails behind when he moves
+function flameMaterial(alpha, speed) {
+  return new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    uniforms: { uTime: { value: 0 }, uLean: { value: new THREE.Vector3() }, uPower: { value: 0.5 }, uAlpha: { value: alpha },
+                uSpeed: { value: speed }, uColor: { value: new THREE.Color(0x2c3036) }, uEdge: { value: new THREE.Color(0x9aa3ae) } },
+    vertexShader: [
+      "uniform float uTime; uniform vec3 uLean; uniform float uPower; uniform float uSpeed;",
+      "varying vec3 vN; varying vec3 vV; varying float vH; varying vec3 vP;",
+      NOISE_GLSL,
+      "void main(){",
+      "  vec3 p = position; float r = max(length(p), 0.0001);",
+      "  float up = clamp(p.y / r * 0.5 + 0.5, 0.0, 1.0);",
+      "  float n = noise3(p * 70.0 + vec3(0.0, -uTime * 2.4 * uSpeed, uTime * 0.3));",
+      "  p += normal * (n - 0.4) * 0.011 * (0.35 + up) * (0.6 + uPower);",
+      "  p.y += up * up * (0.014 + 0.016 * uPower) * (0.7 + 0.6 * n);",
+      "  p += uLean * up * up;",
+      "  vH = up; vP = p;",
+      "  vec4 mv = modelViewMatrix * vec4(p, 1.0);",
+      "  vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz);",
+      "  gl_Position = projectionMatrix * mv;",
+      "}"].join("\n"),
+    fragmentShader: [
+      "uniform float uTime; uniform float uPower; uniform float uAlpha; uniform float uSpeed; uniform vec3 uColor; uniform vec3 uEdge;",
+      "varying vec3 vN; varying vec3 vV; varying float vH; varying vec3 vP;",
+      NOISE_GLSL,
+      "void main(){",
+      "  float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 1.5);",
+      "  float flick = noise3(vP * 110.0 + vec3(0.0, -uTime * 3.2 * uSpeed, uTime));",
+      "  float a = (0.12 + 0.5 * fres) * (0.5 + 0.7 * flick) * (1.0 - smoothstep(0.72, 1.0, vH)) * (0.75 + 0.45 * uPower) * uAlpha;",
+      "  gl_FragColor = vec4(mix(uColor, uEdge, clamp(fres * 0.75 + flick * 0.2, 0.0, 1.0)), clamp(a, 0.0, 0.8));",
+      "}"].join("\n")
+  });
 }
 function buildOrb(market) {
   if (!S.assistant || !S.serverUrl) return;
-  const at = UI.orbAt = mk("a-entity", { position: "0.43 0.075 0.06", class: "clickable" }, market);
-  UI.orb = new THREE.Mesh(new THREE.SphereGeometry(0.026, 32, 20),
-                          new THREE.MeshStandardMaterial({ color: 0x0c1712, emissive: new THREE.Color(ORB_COLOR.idle), emissiveIntensity: 0.5,
-                                                           roughness: 0.25, metalness: 0.1 }));
-  at.object3D.add(UI.orb);
-  UI.orbGlow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: ORB_COLOR.idle, transparent: true, depthWrite: false,
-                                                           blending: THREE.AdditiveBlending }));
-  UI.orbGlow.scale.setScalar(0.1); at.object3D.add(UI.orbGlow);
-  UI.orbLabel = label(at, "Ask me", 0, -0.042, 0, 0.0058, C.dim);
-  // the subtitle above the orb
-  UI.sayAt = mk("a-entity", { position: "-0.03 0.13 -0.02", rotation: "-8 -28 0", visible: false }, at);
-  slab(UI.sayAt, 0.28, 0.14, 0.004, C.panel, { r: 0.016, opacity: SEE });
-  UI.sayText = label(UI.sayAt, "", -0.128, 0.058, 0.004, 0.0062, C.text, "left", 0.256, "top");
-  // it behaves like a button: fingertip, pinch, trigger or mouse
-  const b = { el: at, t: UI.orbLabel, w: 0.06, h: 0.06, d: 0.06, onPress: orbPressed, enabled: () => true, inside: {}, last: 0, z: 0.06 };
+  // Grok is not glued to the table: he follows it on a soft spring, so he trails behind and hurries to catch up
+  const at = UI.orbAt = mk("a-entity", { class: "clickable" }, market.sceneEl);
+  const o = at.object3D;
+  UI.core = new THREE.Mesh(new THREE.SphereGeometry(0.018, 32, 24),
+                           new THREE.MeshStandardMaterial({ color: 0x040506, roughness: 0.3, metalness: 0.35 }));
+  UI.core.renderOrder = 6; o.add(UI.core);
+  UI.flames = [flameMaterial(1.0, 1.0), flameMaterial(0.7, 1.35)];
+  [0.032, 0.025].forEach((r, i) => {
+    const f = new THREE.Mesh(new THREE.SphereGeometry(r, 48, 32), UI.flames[i]);
+    f.renderOrder = 8 + i; f.frustumCulled = false; o.add(f);
+  });
+  // two eyes on the front, facing you
+  UI.face = new THREE.Group(); o.add(UI.face);
+  const eyeMat = new THREE.MeshBasicMaterial({ color: 0xf4f7fa });
+  UI.eyes = [-1, 1].map((s) => {
+    const e = new THREE.Mesh(new THREE.SphereGeometry(0.0038, 16, 12), eyeMat);
+    e.position.set(s * 0.0065, 0.0025, 0.0168); e.renderOrder = 7;
+    UI.face.add(e);
+    return e;
+  });
+  UI.orbNote = label(at, "", 0, -0.05, 0, 0.0055, C.dim);             // only shows a problem, briefly
+  // tapping him works too: fingertip, pinch, trigger or mouse
+  const b = { el: at, t: null, w: 0.08, h: 0.08, d: 0.08, onPress: orbPressed, enabled: () => true, inside: {}, last: 0, z: 0, noPush: true };
   at.tmEnabled = b.enabled;
   at.addEventListener("click", (e) => press(b, e));
   BUTTONS.push(b);
-  // is the server set up for it?
-  fetch(S.serverUrl.replace(/\/+$/, "") + "/status").then((r) => r.json()).then((s) => { AI.ready = !!(s.voice && s.grok); })
-    .catch(() => { AI.ready = false; });
+  AI.pos = new THREE.Vector3(); AI.vel = new THREE.Vector3();
+  fetch(aiUrl("/status")).then((r) => r.json()).then((s) => { AI.ready = !!(s.voice && s.grok); }).catch(() => { AI.ready = false; });
 }
 const aiUrl = (p) => S.serverUrl.replace(/\/+$/, "") + p;
 function aiAudio() {
@@ -2475,48 +2519,12 @@ function aiAudio() {
   if (AI.ctx.state === "suspended") AI.ctx.resume();
   return AI.ctx;
 }
-function aiMode(m) {
-  AI.mode = m;
-  if (!UI.orb) return;
-  UI.orb.material.emissive.setHex(ORB_COLOR[m]); UI.orbGlow.material.color.setHex(ORB_COLOR[m]);
-  UI.orbLabel.setAttribute("value", { idle: "Ask me", listening: "Listening... press when done", thinking: "Thinking...", speaking: "Speaking" }[m]);
-}
-function aiSub(text, holdMs) {
-  if (!UI.sayAt) return;
-  clearTimeout(AI.hide);
-  UI.sayAt.setAttribute("visible", true);
-  UI.sayText.setAttribute("value", trunc(String(text).split(String.fromCharCode(10)).map(clean).join(String.fromCharCode(10)), 320));   // keep line breaks
-  if (holdMs) AI.hide = setTimeout(() => UI.sayAt.setAttribute("visible", false), holdMs);
-}
-function orbPressed() {
-  if (AI.mode === "listening") return aiStop();
-  if (AI.mode === "speaking") { try { AI.src && AI.src.stop(); } catch (e) {} return; }   // press while it talks = stop talking
-  if (AI.mode !== "idle") return;
-  if (AI.ready === false) return aiSub("The assistant is not set up on the server yet (Grok and ElevenLabs keys).", 6000);
-  aiListen();
-}
-async function aiListen() {
-  let stream;
-  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-  catch (e) { return aiSub("I can't hear you: the microphone is blocked. Turn on the voice assistant on the start screen first.", 7000); }
-  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((x) => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(x)) || "";
-  const chunks = [], rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
-  AI.rec = rec;
-  try { const ctx = aiAudio(); AI.micSrc = ctx.createMediaStreamSource(stream); AI.micAn = ctx.createAnalyser(); AI.micSrc.connect(AI.micAn); } catch (e) {}
-  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
-  rec.onstop = () => {
-    stream.getTracks().forEach((tr) => tr.stop());
-    try { AI.micSrc && AI.micSrc.disconnect(); } catch (e) {}
-    AI.micAn = null;
-    aiSend(new Blob(chunks, { type: rec.mimeType || mime || "audio/webm" }));
-  };
-  rec.start();
-  aiMode("listening"); aiSub("Listening... ask about this market, or say \"open crypto\" or \"go back\". Press the orb when you're done.");
-  AI.timer = setTimeout(aiStop, 8000);
-}
-function aiStop() {
-  clearTimeout(AI.timer);
-  if (AI.rec && AI.rec.state === "recording") { aiMode("thinking"); AI.rec.stop(); }
+function aiMode(m) { AI.mode = m; if (m === "awake") AI.awakeT = performance.now(); }
+function aiNote(text) {
+  if (!UI.orbNote) return;
+  clearTimeout(AI.noteT);
+  UI.orbNote.setAttribute("value", trunc(clean(text), 60));
+  AI.noteT = setTimeout(() => UI.orbNote.setAttribute("value", ""), 6000);
 }
 async function aiPost(p, body, json) {
   const r = await fetch(aiUrl(p), { method: "POST", headers: { "Content-Type": json ? "application/json" : (body.type || "audio/webm") },
@@ -2525,35 +2533,120 @@ async function aiPost(p, body, json) {
   if (!r.ok || j.error) throw new Error(j.error || ("server said " + r.status));
   return j;
 }
-async function aiSend(blob) {
-  aiMode("thinking"); aiSub("Thinking...");
+function orbPressed() {
+  if (AI.mode === "speaking") { try { AI.src && AI.src.stop(); } catch (e) {} return; }   // tap while he talks = hush
+  if (AI.ready === false) return aiNote("Grok is not set up on the server yet");
+  if (!AI.listening) wakeStart().then(() => { if (AI.listening) aiGreet(); });
+  else if (AI.mode === "sleep") aiGreet();
+}
+
+// ---------- the microphone: always listening for "Hey Grok" ----------
+async function wakeStart() {
+  if (AI.listening || AI.starting || !S.assistant || !S.serverUrl || !navigator.mediaDevices) return;
+  AI.starting = true;
   try {
-    const heard = String((await aiPost("/stt", blob, false)).text || "").trim();
-    if (!heard) { aiMode("idle"); return aiSub("Sorry, I didn't catch that. Press the orb and try again.", 5000); }
-    aiSub("You: " + heard);
-    const a = await aiPost("/ask", { question: heard, context: aiContext() }, true);
-    const say = a.say || "Sorry, I don't have an answer for that.";
-    aiDo(a.action);
-    aiSub("You: " + heard + "\n\n" + say);
-    await aiSpeak(say, heard);
-  } catch (err) {
-    aiMode("idle"); aiSub("Something went wrong: " + err.message, 8000);
+    AI.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    const ctx = aiAudio();
+    AI.micSrc = ctx.createMediaStreamSource(AI.stream); AI.micAn = ctx.createAnalyser(); AI.micAn.fftSize = 1024; AI.micSrc.connect(AI.micAn);
+    AI.mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((x) => window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(x)) || "";
+    AI.listening = true;
+    recStart();
+    AI.vad = setInterval(vadTick, 50);
+    greetPrefetch();
+  } catch (e) { console.warn("microphone:", e); aiNote("Microphone blocked: allow it on the start screen"); }
+  AI.starting = false;
+}
+function recStart() {
+  AI.chunks = [];
+  const rec = AI.rec = new MediaRecorder(AI.stream, AI.mime ? { mimeType: AI.mime } : undefined);
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) AI.chunks.push(e.data); };
+  rec.start(250);
+  AI.recT0 = performance.now(); AI.speech = false; AI.speechMs = 0; AI.quietMs = 0;
+}
+// end the current clip (and send it if someone spoke), then start a fresh one straight away
+function recCut(send) {
+  const rec = AI.rec, chunks = AI.chunks;
+  rec.onstop = () => { if (send) handleClip(new Blob(chunks, { type: rec.mimeType || AI.mime || "audio/webm" })); };
+  try { rec.stop(); } catch (e) {}
+  recStart();
+}
+function analyserLevel(an) {
+  const a = AI.buf || (AI.buf = new Uint8Array(512));
+  an.getByteTimeDomainData(a);
+  let s = 0; for (let i = 0; i < a.length; i++) { const v = (a[i] - 128) / 128; s += v * v; }
+  return Math.sqrt(s / a.length);
+}
+function vadTick() {
+  if (!AI.listening) return;
+  const now = performance.now(), age = now - AI.recT0;
+  if (AI.mode === "thinking" || AI.mode === "speaking") { if (age > 1500) recCut(false); return; }   // do not listen to himself
+  const lvl = analyserLevel(AI.micAn);
+  AI.micLvl = lvl;
+  const loud = lvl > AI.floor * 2.4 + 0.012;
+  if (!loud) AI.floor = AI.floor * 0.97 + lvl * 0.03;                  // learns how quiet the room is
+  if (loud) { AI.speechMs += 50; AI.quietMs = 0; if (AI.speechMs > 220) AI.speech = true; }
+  else { AI.quietMs += 50; if (!AI.speech) AI.speechMs = Math.max(0, AI.speechMs - 25); }
+  if (AI.speech && AI.quietMs > 650) return recCut(true);               // a sentence just ended: check it
+  if (AI.speech && age > 12000) return recCut(true);                    // a long one: check what we have
+  if (!AI.speech && age > 6000) recCut(false);                          // nothing said: start a fresh clip
+  if (AI.mode === "awake" && !AI.speech && now - AI.awakeT > 9000) aiMode("sleep");   // no question came: back to dozing
+}
+async function handleClip(blob) {
+  if (!blob || blob.size < 1500) return;
+  let heard = "";
+  try { heard = String((await aiPost("/stt", blob, false)).text || "").trim(); }
+  catch (e) { console.warn("listening:", e.message); if (/not set up|429|Too many/i.test(e.message)) aiNote(e.message); return; }
+  if (!heard) return;
+  const m = heard.match(WAKE);
+  if (AI.mode === "sleep") {
+    if (!m) return;                                                     // not talking to Grok
+    const rest = heard.slice(m.index + m[0].length).replace(/^[\s,.!?]+/, "");
+    if (rest.split(/\s+/).filter(Boolean).length >= 3) return aiAnswer(rest);
+    return aiGreet();
+  }
+  if (AI.mode === "awake") {
+    const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "");
+    if (q.split(/\s+/).filter(Boolean).length) aiAnswer(q);
   }
 }
-async function aiSpeak(text, heard) {
+
+// ---------- talking ----------
+async function ttsBuffer(text) {
+  const r = await fetch(aiUrl("/tts"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || ("voice " + r.status)); }
+  return aiAudio().decodeAudioData(await r.arrayBuffer());
+}
+function greetPrefetch() {
+  GREETINGS.forEach((g, i) => { if (!AI.greet[i]) ttsBuffer(g).then((b) => { AI.greet[i] = b; }).catch(() => {}); });
+}
+function playBuffer(buf, after) {
+  const ctx = aiAudio(), src = ctx.createBufferSource();
+  src.buffer = buf; src.playbackRate.value = 1.06;                      // a touch brighter and cuter
+  src.connect(AI.outAn);
+  AI.src = src;
+  src.onended = () => { if (AI.src === src) AI.src = null; if (after) after(); };
+  src.start();
+}
+async function aiSpeak(text, then) {
   try {
-    const r = await fetch(aiUrl("/tts"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-    if (!r.ok) throw new Error("voice " + r.status);
-    const ctx = aiAudio(), audio = await ctx.decodeAudioData(await r.arrayBuffer());
-    const src = ctx.createBufferSource(); src.buffer = audio; src.connect(AI.outAn);
-    AI.src = src;
+    const buf = await ttsBuffer(text);
     aiMode("speaking");
-    src.onended = () => { aiMode("idle"); aiSub("You: " + heard + "\n\n" + text, 9000); };
-    src.start();
-  } catch (e) {
-    console.warn("assistant voice:", e);
-    aiMode("idle"); aiSub("You: " + heard + "\n\n" + text, 12000);              // no sound, but the answer stays on screen
-  }
+    playBuffer(buf, () => aiMode(then || "sleep"));
+  } catch (e) { console.warn("voice:", e.message); aiNote(e.message); aiMode(then || "sleep"); }
+}
+function aiGreet() {
+  AI.hopT = performance.now();
+  const i = Math.floor(Math.random() * GREETINGS.length);
+  if (AI.greet[i]) { aiMode("speaking"); playBuffer(AI.greet[i], () => aiMode("awake")); }
+  else aiSpeak(GREETINGS[i], "awake");
+}
+async function aiAnswer(q) {
+  aiMode("thinking");
+  try {
+    const a = await aiPost("/ask", { question: q, context: aiContext() }, true);
+    aiDo(a.action);
+    await aiSpeak(a.say || "Hmm, I'm not sure about that one.", "sleep");
+  } catch (e) { console.warn("answer:", e.message); aiNote(e.message); aiMode("sleep"); }
 }
 // what is on the table right now, in plain words, for Grok
 function aiContext() {
@@ -2576,7 +2669,7 @@ function aiContext() {
     L.push("Lobby. Category tab: " + state.cat + ". Tabs: " + state.cats.join(", ") + ".");
     visibleMarkets().forEach((m, i) => L.push(`Market ${i}: ${m.title}: ` + m.opts.slice(0, 2).map((o) => o.name + " " + pct(o.price)).join(", ")));
   }
-  return L.join("\n");
+  return L.join(String.fromCharCode(10));
 }
 // carry out what the user asked for (moving around the app only; never money)
 function aiDo(a) {
@@ -2591,34 +2684,123 @@ function aiDo(a) {
   } else if (a.type === "activity" && !inMarket()) { state.activity = "positions"; state.page = 0; actLoad(); refresh(); }
   else if (a.type === "simulate" && inMarket() && !LIVE.on && !state.sim) toggleSim();
 }
-// the orb breathes when idle, follows your voice when listening, swirls when thinking, pulses with its voice when speaking
+
+// ---------- how he moves, every frame ----------
 function stepOrb(now) {
-  if (!UI.orb) return;
+  if (!UI.orbAt) return;
+  const t = now / 1000, o = UI.orbAt.object3D, dt = Math.min(0.05, Math.max(0.001, (now - (AI.last || now)) / 1000));
+  AI.last = now;
+  // where he wants to be: just right of the table, a little above it
+  const target = document.getElementById("market").object3D.localToWorld(gv3.set(0.42, 0.13, 0.04));
+  if (!AI.placed) { AI.pos.copy(target); AI.placed = true; }
+  // a soft spring: he lags behind, then hurries to catch up
+  gv4.copy(target).sub(AI.pos).multiplyScalar(34).addScaledVector(AI.vel, -7.5);
+  AI.vel.addScaledVector(gv4, dt);
+  if (AI.vel.length() > 2) AI.vel.setLength(2);
+  AI.pos.addScaledVector(AI.vel, dt);
+  // sound level: his voice while he talks, yours while he listens
   let lvl = 0;
-  const an = AI.mode === "listening" ? AI.micAn : AI.mode === "speaking" ? AI.outAn : null;
-  if (an) {
-    const a = AI.buf || (AI.buf = new Uint8Array(256));
-    an.getByteTimeDomainData(a);
-    let s = 0; for (let i = 0; i < a.length; i++) { const v = (a[i] - 128) / 128; s += v * v; }
-    lvl = Math.min(1, Math.sqrt(s / a.length) * 5);
-  }
+  if (AI.mode === "speaking" && AI.outAn) lvl = Math.min(1, analyserLevel(AI.outAn) * 5);
+  else if (AI.mode === "awake" && AI.micAn) lvl = Math.min(1, (AI.micLvl || 0) * 4);
   AI.lvl = AI.lvl * 0.75 + lvl * 0.25;
-  const idle = AI.mode === "idle", think = AI.mode === "thinking";
-  UI.orb.material.emissiveIntensity = idle ? 0.45 + 0.15 * Math.sin(now / 700) : think ? 0.6 + 0.35 * Math.sin(now / 140) : 0.7 + AI.lvl * 1.4;
-  UI.orb.scale.setScalar(1 + (idle ? 0.03 * Math.sin(now / 700) : think ? 0.04 * Math.sin(now / 140) : AI.lvl * 0.3));
-  UI.orbGlow.scale.setScalar(0.1 + AI.lvl * 0.09 + (think ? 0.015 * Math.sin(now / 140) : idle ? 0.01 * Math.sin(now / 700) : 0));
-  if (think) UI.orb.rotation.y += 0.06;
+  // floating, talking bounces, and a little hop when he wakes up
+  const hop = Math.max(0, 1 - (now - AI.hopT) / 450);
+  const bob = 0.005 * Math.sin(t * 1.7) + (AI.mode === "speaking" ? 0.007 * Math.abs(Math.sin(t * 9)) * (0.35 + AI.lvl) : 0)
+            + 0.025 * Math.sin(Math.PI * (1 - hop)) * (hop > 0 ? 1 : 0);
+  o.position.copy(AI.pos); o.position.y += bob;
+  // he always faces you
+  const cam = document.querySelector("a-scene").camera;
+  if (cam) { cam.getWorldPosition(gv5); gv5.y = Math.min(gv5.y, o.position.y + 0.4); o.lookAt(gv5); }
+  // squash and stretch while talking
+  const sq = AI.mode === "speaking" ? 0.06 * AI.lvl * Math.sin(t * 18) : 0;
+  o.scale.set(1 + sq, 1 - sq, 1 + sq);
+  // the flame: calm when dozing, bright when listening, busy when thinking, pulsing with his voice; it trails behind his motion
+  const power = AI.mode === "sleep" ? 0.35 : AI.mode === "awake" ? 0.95 : AI.mode === "thinking" ? 0.6 + 0.3 * Math.sin(t * 7) : 0.55 + AI.lvl * 0.9;
+  gq1.copy(o.quaternion).invert();
+  const lean = gv4.copy(AI.vel).multiplyScalar(-0.05);
+  if (lean.length() > 0.03) lean.setLength(0.03);
+  lean.applyQuaternion(gq1);
+  UI.flames.forEach((f, i) => {
+    f.uniforms.uTime.value = t + i * 7.3;
+    f.uniforms.uPower.value += (power - f.uniforms.uPower.value) * Math.min(1, dt * 6);
+    f.uniforms.uLean.value.lerp(lean, Math.min(1, dt * 8));
+  });
+  // eyes: blink now and then, bigger when listening, glance up while thinking, happy squint while talking
+  if (now > AI.nextBlink) { AI.blinkT = now; AI.nextBlink = now + 2200 + Math.random() * 3200; if (Math.random() < 0.2) AI.nextBlink = now + 260; }
+  const bk = clamp((now - AI.blinkT) / 150, 0, 1), blink = bk < 1 ? 0.12 + 0.88 * Math.abs(1 - 2 * bk) : 1;
+  const size = AI.mode === "awake" ? 1.25 : AI.mode === "sleep" ? 0.9 : 1;
+  const tall = AI.mode === "speaking" ? 0.7 + 0.15 * Math.sin(t * 9) : AI.mode === "sleep" ? 0.75 : 1;
+  UI.eyes.forEach((e, i) => {
+    e.scale.set(size, size * tall * blink, 0.5);
+    e.position.x = (i ? 1 : -1) * 0.0065 + (AI.mode === "thinking" ? 0.002 * Math.sin(t * 1.3) : 0);
+    e.position.y = 0.0025 + (AI.mode === "thinking" ? 0.003 : 0);
+  });
 }
-// start screen: ask for the microphone here, because the permission box can be hidden once mixed reality starts
+
+// ---------- start screen: allow the microphone here (the permission box can be hidden once mixed reality starts) ----------
 const voiceBtn = document.getElementById("voiceBtn");
 if (S.assistant && S.serverUrl && navigator.mediaDevices) voiceBtn.style.display = "block";
+if (store.get("tm-voice") === "1") { voiceBtn.className = "on"; voiceBtn.textContent = "Voice on: say \"Hey Grok\" in the app"; }
 voiceBtn.addEventListener("click", () => {
   try { aiAudio(); } catch (e) {}
   navigator.mediaDevices.getUserMedia({ audio: true }).then((s) => {
     s.getTracks().forEach((tr) => tr.stop());
-    voiceBtn.className = "on"; voiceBtn.textContent = "Voice assistant on: press the glowing orb on the table to talk";
+    store.set("tm-voice", "1");
+    voiceBtn.className = "on"; voiceBtn.textContent = "Voice on: say \"Hey Grok\" in the app";
   }).catch(() => { voiceBtn.textContent = "Microphone blocked. Allow it in the browser settings, then try again"; });
 });
+
+/* ---------- glove hands, drawn from the hand-tracking joints the app already reads ----------
+   Each finger bone is a short tube and each joint a small ball. Drawn in two steps: first only the shape
+   (so overlapping fingers hide each other), then a dark see-through skin with a bright edge, like the Quest's own hands. */
+const GLOVE_SEGS = BONES.concat([[6, 11], [11, 16], [16, 21], [2, 6], [1, 5]]);    // finger bones plus across the palm
+const JR = [0.017, 0.013, 0.0112, 0.0102, 0.0092, 0.0125, 0.0102, 0.0094, 0.0088, 0.008, 0.0125, 0.0104, 0.0096, 0.009, 0.0082,
+            0.0122, 0.0098, 0.009, 0.0085, 0.0078, 0.0115, 0.009, 0.0083, 0.0078, 0.0072];
+const GL = { hands: [] }, GM = new THREE.Matrix4(), GQ = new THREE.Quaternion(), GS = new THREE.Vector3(), GP = new THREE.Vector3(),
+      GD = new THREE.Vector3(), GUP = new THREE.Vector3(0, 1, 0);
+function gloveHand(i) {
+  if (GL.hands[i]) return GL.hands[i];
+  if (!GL.geoC) {
+    GL.geoC = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true);
+    GL.geoS = new THREE.SphereGeometry(1, 14, 10);
+    GL.pre = new THREE.MeshBasicMaterial({ colorWrite: false });
+    GL.col = new THREE.MeshStandardMaterial({ color: 0x0c0e11, transparent: true, depthWrite: false, roughness: 1 });
+    GL.col.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace("#include <dithering_fragment>", [
+        "#include <dithering_fragment>",
+        "float tmRim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.2);",
+        "gl_FragColor = vec4(mix(vec3(0.03, 0.035, 0.04), vec3(0.92, 0.95, 1.0), tmRim), mix(0.32, 0.95, tmRim));"].join("\n"));
+    };
+    GL.col.customProgramCacheKey = () => "tm-glove-joints";
+  }
+  const root = document.querySelector("a-scene").object3D, n = GLOVE_SEGS.length;
+  const make = (geo, mat, count, order) => {
+    const m = new THREE.InstancedMesh(geo, mat, count);
+    m.frustumCulled = false; m.renderOrder = order; m.visible = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    root.add(m); return m;
+  };
+  return (GL.hands[i] = { parts: [make(GL.geoC, GL.pre, n, 20), make(GL.geoC, GL.col, n, 21), make(GL.geoS, GL.pre, 25, 20), make(GL.geoS, GL.col, 25, 21)] });
+}
+function drawGlove(i, joints) {
+  if (S.handStyle !== "glove") return;
+  const h = joints ? gloveHand(i) : GL.hands[i];
+  if (!h) return;
+  h.parts.forEach((m) => { m.visible = !!joints; });
+  if (!joints) return;
+  const [cp, cc, sp, sc] = h.parts;
+  for (let k = 0; k < 25; k++) { GM.compose(joints[k], GQ.identity(), GS.setScalar(JR[k])); sp.setMatrixAt(k, GM); sc.setMatrixAt(k, GM); }
+  GLOVE_SEGS.forEach(([a, b], k) => {
+    const A = joints[a], B = joints[b];
+    GD.subVectors(B, A);
+    const len = GD.length() || 0.00001;
+    GP.addVectors(A, B).multiplyScalar(0.5);
+    GQ.setFromUnitVectors(GUP, GD.multiplyScalar(1 / len));
+    const r = (JR[a] + JR[b]) / 2;
+    GM.compose(GP, GQ, GS.set(r, len, r));
+    cp.setMatrixAt(k, GM); cc.setMatrixAt(k, GM);
+  });
+  h.parts.forEach((m) => { m.instanceMatrix.needsUpdate = true; });
+}
 
 arcInit();
 loadTestState();

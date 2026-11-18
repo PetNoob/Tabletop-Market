@@ -69,7 +69,7 @@ export default {
       if (path === "/stt" || path === "/ask" || path === "/tts") {
         if (request.method !== "POST") return reply({ error: "Use POST" }, 405);
         const ip = request.headers.get("CF-Connecting-IP") || "?";
-        if (!rateOk(ip, 90)) return reply({ error: "Too many requests, try again in a bit" }, 429);
+        if (!rateOk(ip, 400)) return reply({ error: "Too many requests, try again in a bit" }, 429);
 
         // listening: audio from the headset microphone -> text (ElevenLabs Scribe)
         if (path === "/stt") {
@@ -118,15 +118,24 @@ export default {
           if (!env.ELEVENLABS_API_KEY) return reply({ error: "ElevenLabs key is not set up" }, 503);
           const text = String(body.text || "").slice(0, 600);
           if (!text) return reply({ error: "No text" }, 400);
-          const voice = env.ELEVENLABS_VOICE || "JBFqnCBsd6RMkjVDRZzb";
-          const r = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(voice) + "?output_format=mp3_44100_128", {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "xi-api-key": env.ELEVENLABS_API_KEY },
-            body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" })
-          });
-          if (!r.ok) { const t = await r.text(); return reply({ error: "ElevenLabs: " + t.slice(0, 160) }, 502); }
-          const h = new Headers(cors); h.set("Content-Type", "audio/mpeg"); h.set("Cache-Control", "no-store");
-          return new Response(r.body, { status: 200, headers: h });
+          // Gigi (playful), Elli (young), Sarah (soft), Rachel (calm): the first one this account can use is spoken
+          const voices = [env.ELEVENLABS_VOICE, "jBpfuIE2acCO8z3wKNLl", "MF3mGyEYCl7XYWbV9V6O", "EXAVITQu4vr4xnSDxMaL", "21m00Tcm4TlvDq8ikWAM"].filter(Boolean);
+          let lastErr = "";
+          for (const voice of voices) {
+            const r = await fetch("https://api.elevenlabs.io/v1/text-to-speech/" + encodeURIComponent(voice) + "?output_format=mp3_44100_128", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "xi-api-key": env.ELEVENLABS_API_KEY },
+              body: JSON.stringify({ text, model_id: "eleven_flash_v2_5",
+                                     voice_settings: { stability: 0.35, similarity_boost: 0.75, style: 0.45, use_speaker_boost: true } })
+            });
+            if (r.ok) {
+              const h = new Headers(cors); h.set("Content-Type", "audio/mpeg"); h.set("Cache-Control", "no-store");
+              return new Response(r.body, { status: 200, headers: h });
+            }
+            lastErr = (await r.text()).slice(0, 160);
+            if (r.status === 401 || r.status === 429) break;                    // a key or quota problem: other voices will not help
+          }
+          return reply({ error: "ElevenLabs: " + lastErr }, 502);
         }
       }
 
@@ -196,7 +205,8 @@ function rateOk(ip, limit) {
 }
 
 // what the assistant may and may not do. Gemini is a regulated market, so it explains and never pushes a bet.
-const ASSISTANT_RULES = `You are the voice assistant inside Tabletop Market, a mixed reality app on a Meta Quest that shows live prediction markets from Gemini on the user's table.
+const ASSISTANT_RULES = `You are Grok, a small, cheerful floating flame-spirit with big eyes who lives on the user's table in Tabletop Market, a mixed reality app on a Meta Quest that shows live prediction markets from Gemini.
+Your personality is warm, playful and a little cute, never sarcastic, and you keep things light.
 Answer out loud: one to three short sentences, at most 60 words, plain spoken English, no lists, no markdown, no emoji.
 Use the table information you are given, plus general knowledge. If you do not know, say so briefly.
 Prices are probabilities: 0.62 means a 62 percent chance.

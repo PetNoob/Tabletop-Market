@@ -212,6 +212,14 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Welcome screen: "Turn on the voice assistant (microphone)" asks for mic permission before AR (the prompt may be hidden in immersive mode). AudioContext is unlocked on the Enter press.
 - Not verified: MediaRecorder and mic inside the Quest browser's immersive AR session, and whether ElevenLabs accepts the Quest's webm audio.
 
+## Grok v2: wake word, flame character, joint gloves (Nov 17, UNTESTED; page start checked)
+- Brian's asks: no subtitles; a floating character (black core ball, see-through dark grey animated flame, two blinking eyes, no mouth) with float and talking bounces; it lags behind when the table moves; "Hey Grok" wake word with an automatic "Hey!", "Yeah?" or "What's up?"; a cuter (less macho) voice; fix the gloves, which were not showing.
+- Grok (`buildOrb`/`stepOrb`): an entity on the scene root (not the table) following a world target 0.42/0.13/0.04 in table space on a soft spring (34 / 7.5), always facing the camera. Two layers of `flameMaterial` (ShaderMaterial, value noise, fresnel alpha, top stretches, `uLean` from velocity so it trails). Eyes blink every 2 to 5 s, bigger when awake, glance up when thinking, squint when speaking. Modes: sleep, awake, thinking, speaking. A tiny note under him shows only on errors.
+- Wake word: after the start-screen mic button (stores tm-voice=1) the mic starts on Enter (`wakeStart`). Always-on MediaRecorder with a loudness check (`vadTick`, adaptive floor) cuts each sentence and sends it to /stt; regex WAKE matches "hey grok" and mishearings. While sleeping, only wake-word sentences act; awake for 9 s takes the next sentence as the question. Greetings are pre-fetched as audio. He does not listen while thinking or speaking. Tapping him still wakes him. Cost note: every sentence spoken nearby is one ElevenLabs speech-to-text call; worker limit raised to 400 an hour per IP.
+- Voice: worker tries Gigi jBpfuIE2acCO8z3wKNLl, Elli MF3mGyEYCl7XYWbV9V6O, Sarah EXAVITQu4vr4xnSDxMaL, Rachel 21m00Tcm4TlvDq8ikWAM in order (first one the account can use), with livelier voice_settings; playback at 1.06x. Personality line added to ASSISTANT_RULES.
+- Gloves: the A-Frame hand-tracking-controls model is no longer used. `drawGlove(i, joints)` draws each hand from the 25 joints xr-input already reads (InstancedMesh tubes for GLOVE_SEGS and balls for joints, radii JR), depth pre-pass then rim-lit see-through skin.
+- Needs the worker re-pasted (voice list, personality, rate limit).
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
