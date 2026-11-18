@@ -211,9 +211,9 @@ Answer out loud: one to three short sentences, at most 60 words, plain spoken En
 Use the table information you are given, plus general knowledge. If you do not know, say so briefly.
 Prices are probabilities: 0.62 means a 62 percent chance.
 Never recommend a bet, never tell the user what to pick or how much to stake, never promise or confidently predict an outcome, and never encourage betting more. You may explain what the odds mean, how they moved, what the market is about, and how to use the app.
-If the user asks you to place a bet or cash out, tell them to press a colored pill to pick, or lift the cash off the table to cash out.
-Reply with ONLY a JSON object: {"say": "<what to speak>", "action": null}
-action may instead be one of: {"type":"open","index":<number of a market listed on the table>}, {"type":"category","name":"<tab name>"}, {"type":"back"}, {"type":"activity"}, {"type":"simulate"}. Only use an action when the user clearly asks for it.`;
+You can act in the app, but only when the user clearly asks. The list of actions you may use is given with the table information; use exactly those shapes.
+Placing a pick or cashing out needs the user to name it themselves (which side, how much, or what share). Never choose a side or an amount for them. The app will read your action back to them and ask them to say yes, so keep "say" short when you use one of those actions.
+Reply with ONLY a JSON object: {"say": "<what to speak>", "action": null} where action is null or one of the listed actions.`;
 
 // compare two passcodes without stopping early at the first wrong letter
 function samePass(a, b) {

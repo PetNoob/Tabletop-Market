@@ -2615,7 +2615,7 @@ function vadTick() {
   if (AI.mode !== "awake") { if (age > 1500) recCut(false); return; }   // asleep, thinking or talking: nothing is sent
   const lvl = analyserLevel(AI.micAn);
   AI.micLvl = lvl;
-  const loud = lvl > AI.floor * 2.4 + 0.012;
+  const loud = lvl > AI.floor * 2 + 0.006;
   if (!loud) AI.floor = AI.floor * 0.97 + lvl * 0.03;                  // learns how quiet the room is
   if (loud) { AI.speechMs += 50; AI.quietMs = 0; if (AI.speechMs > 220) AI.speech = true; }
   else { AI.quietMs += 50; if (!AI.speech) AI.speechMs = Math.max(0, AI.speechMs - 25); }
@@ -2632,6 +2632,7 @@ async function handleClip(blob) {
   catch (e) { console.warn("listening:", e.message); if (/not set up|429|Too many/i.test(e.message)) aiNote(e.message); return; }
   if (!heard) return;
   if (AI.mode !== "awake") return;
+  if (AI.pending) return aiSpeak(aiConfirm(heard), "awake");
   const m = heard.match(WAKE);
   const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "");
   if (q.split(/\s+/).filter(Boolean).length) aiAnswer(q);
@@ -2671,45 +2672,143 @@ async function aiAnswer(q) {
   aiMode("thinking");
   try {
     const a = await aiPost("/ask", { question: q, context: aiContext() }, true);
-    aiDo(a.action);
-    await aiSpeak(a.say || "Hmm, I'm not sure about that one.", "awake");
+    const own = aiDo(a.action);
+    await aiSpeak(own || a.say || "Hmm, I'm not sure about that one.", "awake");
   } catch (e) { console.warn("answer:", e.message); aiNote(e.message); aiMode("awake"); }
 }
-// what is on the table right now, in plain words, for Grok
+// what is on the table right now, in plain words, for Grok, plus the actions he may use
 function aiContext() {
-  const L = [];
-  L.push("Mode: " + (LIVE.on ? "live, the owner's real money on Gemini" : "test money") + ". Balance " + money(state.balance) + ".");
+  const L = [], NL = String.fromCharCode(10);
+  L.push("Mode: " + (LIVE.on ? "live, the owner's real money on Gemini, at most " + money(LIVE.cap) + " per pick" : "test money") +
+         ". Balance " + money(state.balance) + ".");
   if (inMarket()) {
     const m = state.market;
     L.push("Open market: " + m.title + (m.sport && m.live ? " (live now)" : "") + ". Category " + (m.category || "") + ". " + whenText(m));
-    m.opts.slice(0, 8).forEach((o) => {
+    L.push(m.kind === "duel" ? "This is a two-sided game: picking means picking one side (answer index 0 or 1)."
+                             : "Answers can each be picked Yes or No.");
+    m.opts.slice(0, 12).forEach((o, i) => {
       const h = o.hist && o.hist.loaded && o.hist.pts.length ? o.hist.pts : null;
-      L.push(`- ${o.name}: ${pct(o.price)}` + (h ? ` (about 24 hours ago: ${pct(h[0].p)})` : ""));
+      L.push(`Answer ${i}: ${o.name}: ${pct(o.price)}` + (h ? ` (about 24 hours ago: ${pct(h[0].p)})` : ""));
     });
     if (state.sim) L.push("The odds are being simulated right now (demo, not real).");
-    Object.keys(state.picks).filter((k) => k.split("|")[0] === m.ticker).forEach((k) => {
-      const p = state.picks[k]; L.push(`The user holds a pick: ${p.what || k}, staked ${money(p.stake)}.`);
+    legsOf(m).forEach((leg, i) => {
+      const p = state.picks[pickKey(m, leg)];
+      if (p) L.push(`The user holds: ${m.kind === "duel" ? leg.name : leg.name + " on " + leg.o.name}, staked ${money(p.stake)}, worth about ${money(p.shares * legPrice(leg))}.`);
     });
   } else if (state.activity) {
-    L.push("The Activity tab is open (" + state.activity + ").");
+    L.push("The Activity tab is open, showing " + state.activity + ".");
   } else {
     L.push("Lobby. Category tab: " + state.cat + ". Tabs: " + state.cats.join(", ") + ".");
     visibleMarkets().forEach((m, i) => L.push(`Market ${i}: ${m.title}: ` + m.opts.slice(0, 2).map((o) => o.name + " " + pct(o.price)).join(", ")));
   }
-  return L.join(String.fromCharCode(10));
+  L.push("Actions you may use (only when the user clearly asks):");
+  L.push('{"type":"open","name":"<words from the market title, e.g. a team or coin>"} or {"type":"open","index":<Market number>} to open a market');
+  L.push('{"type":"category","name":"<tab name>"} to switch tab; {"type":"back"} to go back to the list');
+  L.push('{"type":"activity","tab":"positions" | "orders" | "history"} to show the user\'s activity');
+  L.push('{"type":"simulate"} to simulate the odds (test money only)');
+  if (inMarket()) {
+    L.push('{"type":"order","answer":<Answer index>,"side":"yes" | "no","amount":<dollars>} to place a pick the user asked for (they must say the side and the amount)');
+    L.push('{"type":"cashout","answer":<Answer index>,"percent":<1 to 100>} to cash out part or all of a pick the user holds');
+  }
+  return L.join(NL);
 }
-// carry out what the user asked for (moving around the app only; never money)
+// find an answer on the open market by index or by (part of) its name
+function aiFindAnswer(m, a) {
+  if (Number.isInteger(a.answer) && m.opts[a.answer]) return a.answer;
+  const s = String(a.name || a.answer || "").toLowerCase();
+  if (!s) return -1;
+  return m.opts.findIndex((o) => o.name.toLowerCase().includes(s) || s.includes(o.name.toLowerCase()));
+}
+// carry out what the user asked for. Returns words to speak instead of Grok's own, or nothing.
 function aiDo(a) {
-  if (!a || !a.type) return;
-  if (a.type === "back" && inMarket()) backToLobby();
-  else if (a.type === "category" && a.name) {
+  if (!a || !a.type) return "";
+  if (a.type === "back") { if (inMarket()) backToLobby(); else if (state.activity) { state.activity = ""; refresh(); } return ""; }
+  if (a.type === "category" && a.name) {
     const n = state.cats.find((c) => c.toLowerCase() === String(a.name).toLowerCase());
-    if (n) { if (inMarket()) backToLobby(); state.activity = ""; selectCat(n); }
-  } else if (a.type === "open" && inLobby() && !state.activity) {
-    const m = visibleMarkets()[a.index | 0];
-    if (m) { UI.fromCard = CARDS.find((c) => c.m === m) || null; openMarket(m); }
-  } else if (a.type === "activity" && !inMarket()) { state.activity = "positions"; state.page = 0; actLoad(); refresh(); }
-  else if (a.type === "simulate" && inMarket() && !LIVE.on && !state.sim) toggleSim();
+    if (!n) return "I couldn't find that tab.";
+    if (inMarket()) backToLobby();
+    state.activity = ""; selectCat(n); return "";
+  }
+  if (a.type === "activity") {
+    if (inMarket()) backToLobby();
+    state.activity = ["positions", "orders", "history"].includes(a.tab) ? a.tab : "positions";
+    state.page = 0; actLoad(); refresh(); return "";
+  }
+  if (a.type === "simulate") { if (inMarket() && !LIVE.on && !state.sim) toggleSim(); return ""; }
+  if (a.type === "open") return aiOpen(a), "";
+  if (a.type === "order") return aiOrder(a);
+  if (a.type === "cashout") return aiCashout(a);
+  return "";
+}
+// open a market: by number on the board, or by name in what is loaded, or by asking Gemini
+function aiOpen(a) {
+  const go = (m) => {
+    if (!m) return;
+    if (inMarket()) { backToLobby(); setTimeout(() => go2(m), 900); } else go2(m);
+  };
+  const go2 = (m) => { state.activity = ""; UI.fromCard = CARDS.find((c) => c.m === m) || null; openMarket(m); };
+  if (Number.isInteger(a.index) && !a.name) return go(visibleMarkets()[a.index]);
+  const words = String(a.name || "").toLowerCase().split(/\W+/).filter((x) => x.length > 1);
+  if (!words.length) return;
+  const all = [].concat.apply([], Object.values(state.store).map((s) => s.markets || []));
+  const hit = all.find((m) => words.every((w) => m.title.toLowerCase().includes(w))) ||
+              all.find((m) => words.some((w) => w.length > 2 && m.title.toLowerCase().includes(w)));
+  if (hit) return go(hit);
+  getJSON(GEMINI + "/events?status=active&limit=8&search=" + encodeURIComponent(words.join(" ")), 45000).then((j) => {
+    const list = (Array.isArray(j) ? j : j.data || []).map(toMarket).filter(Boolean);
+    if (list.length) go(list[0]); else aiNote("No open market found for that");
+  }).catch(() => aiNote("Could not search Gemini right now"));
+}
+// a pick by voice: read it back, and only place it when the user says yes
+function aiOrder(a) {
+  if (!inMarket()) return "Open a market first, then tell me what to pick.";
+  const m = state.market;
+  let idx = aiFindAnswer(m, a), side = String(a.side || "yes").toLowerCase() === "no" ? "no" : "yes";
+  if (idx < 0) return "Which answer did you mean?";
+  let legIdx;
+  if (m.kind === "duel") { legIdx = side === "no" ? 1 - idx : idx; }
+  else { if (m.sel !== idx) { m.sel = idx; showLegs(); refresh(); } legIdx = side === "no" ? 1 : 0; }
+  const cap = LIVE.on ? Math.min(state.balance, LIVE.cap) : state.balance;
+  const amount = Math.round(clamp(parseFloat(a.amount) || 0, 0, cap) * 100) / 100;
+  if (!(amount > 0)) return parseFloat(a.amount) > 0 ? "You don't have enough balance for that." : "How much would you like to put on it?";
+  const leg = legsOf(m)[legIdx], what = m.kind === "duel" ? leg.name : `${leg.name} on ${leg.o.name}`;
+  AI.pending = { kind: "order", ticker: m.ticker, legIdx, amount, t: performance.now() };
+  const capped = amount < (parseFloat(a.amount) || 0) ? " That's the most I can do." : "";
+  return `${LIVE.on ? "With real money, put" : "Put"} ${money(amount)} on ${what} at ${pct(legPrice(leg))}?${capped} Say yes to confirm.`;
+}
+// a cash-out by voice, with the same yes-to-confirm
+function aiCashout(a) {
+  if (!inMarket()) return "Open the market with your pick first.";
+  const m = state.market, legs = legsOf(m);
+  const held = legs.map((leg, i) => (state.picks[pickKey(m, leg)] ? i : -1)).filter((i) => i >= 0);
+  if (!held.length) return "You don't have a pick on this market.";
+  let i = held[0];
+  if (held.length > 1) {
+    const idx = aiFindAnswer(m, a);
+    const want = legs.findIndex((leg) => leg.i === idx);
+    if (want >= 0 && held.includes(want)) i = want;
+  }
+  const frac = clamp((parseFloat(a.percent) || 100) / 100, 0.01, 1), p = pickAt(i);
+  AI.pending = { kind: "cashout", ticker: m.ticker, legIdx: i, frac, t: performance.now() };
+  const what = m.kind === "duel" ? legs[i].name : `${legs[i].name} on ${legs[i].o.name}`;
+  return `Cash out ${Math.round(frac * 100)} percent of your ${what} pick, about ${money(p.value * frac)}? Say yes to confirm.`;
+}
+// the user answered the read-back: yes places it, anything else cancels it
+function aiConfirm(heard) {
+  const p = AI.pending; AI.pending = null;
+  const yes = /\b(yes|yeah|yep|yup|sure|confirm|confirmed|do it|go ahead|ok|okay)\b/i.test(heard) && !/\b(no|nope|don'?t|cancel|stop|wait)\b/i.test(heard);
+  if (!yes) return "Okay, cancelled.";
+  if (!inMarket() || state.market.ticker !== p.ticker || performance.now() - p.t > 30000) return "That one expired. Ask me again.";
+  if (p.kind === "order") {
+    state.sel = p.legIdx; state.amount = p.amount; state.typed = ""; state.note = "";
+    confirmPick();
+    return LIVE.on ? "Sending it to Gemini now." : "Done! It's on the table.";
+  }
+  if (p.kind === "cashout") {
+    if (grabBegin(p.legIdx, p.frac)) grabDone(true);
+    return LIVE.on ? "Selling it on Gemini now." : "Done, it's in your balance.";
+  }
+  return "";
 }
 
 // ---------- how he moves, every frame ----------
@@ -2749,7 +2848,7 @@ function stepOrb(now) {
   const sq = (AI.mode === "speaking" ? 0.06 * AI.lvl * Math.sin(t * 18) : 0) + (asleep ? 0.03 * Math.sin(t * 1.2) : 0) + AI.squash;
   o.scale.set(1 + sq * 0.6, 1 - sq, 1 + sq * 0.6);
   // the flame: calm when dozing, bright when listening, busy when thinking, pulsing with his voice; it trails behind his motion
-  const power = (asleep ? 0.12 : AI.mode === "awake" ? 0.95 : AI.mode === "thinking" ? 0.6 + 0.3 * Math.sin(t * 7) : 0.55 + AI.lvl * 0.9) + AI.flare;
+  const power = (asleep ? 0.12 : AI.mode === "awake" ? 0.95 + (AI.speech ? 0.45 : 0) : AI.mode === "thinking" ? 0.6 + 0.3 * Math.sin(t * 7) : 0.55 + AI.lvl * 0.9) + AI.flare;
   gq1.copy(o.quaternion).invert();
   const lean = gv4.copy(AI.vel).multiplyScalar(-0.05);
   if (lean.length() > 0.03) lean.setLength(0.03);
@@ -2762,7 +2861,7 @@ function stepOrb(now) {
   // eyes: blink now and then, bigger when listening, glance up while thinking, happy squint while talking
   if (now > AI.nextBlink) { AI.blinkT = now; AI.nextBlink = now + 2200 + Math.random() * 3200; if (Math.random() < 0.2) AI.nextBlink = now + 260; }
   const bk = clamp((now - AI.blinkT) / 150, 0, 1), blink = bk < 1 ? 0.12 + 0.88 * Math.abs(1 - 2 * bk) : 1;
-  const size = AI.mode === "awake" ? 1.25 : asleep ? 1.05 : 1;
+  const size = AI.mode === "awake" ? (AI.speech ? 1.45 : 1.25) : asleep ? 1.05 : 1;
   const tall = AI.mode === "speaking" ? 0.7 + 0.15 * Math.sin(t * 9) : asleep ? 0.12 : 1;   // asleep: eyes shut to thin lines
   UI.eyes.forEach((e, i) => {
     e.scale.set(size, size * tall * blink, 0.5);
