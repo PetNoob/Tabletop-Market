@@ -705,17 +705,33 @@ function makePile(parent, x, z) {
    tween(name, ms, step, done): calls step(k) every frame with k going 0 to 1. A new tween with the
    same name replaces the old one, so pressing quickly never leaves two fighting. */
 const ANIMS = [];
+// an error is shown as a small note under Grok ("Error L1234: ..."), at most once every few seconds per message,
+// so a headset test can tell exactly what broke; the app carries on instead of freezing
+const ERRS = {};
+function reportErr(tag, e) {
+  const msg = String((e && e.message) || e), now = performance.now();
+  if (ERRS[msg] && now - ERRS[msg] < 4000) return;
+  ERRS[msg] = now;
+  const m = /index\.html[^:]*:(\d+)/.exec(String(e && e.stack || "")) || /:(\d+):\d+\)?\s*$/m.exec(String(e && e.stack || ""));
+  console.error("[" + tag + "]", e);
+  try { aiNote("Error " + (m ? "L" + m[1] + " " : "") + tag + ": " + msg); } catch (x) {}
+}
+window.addEventListener("error", (ev) => reportErr("page", ev.error || ev.message));
+window.addEventListener("unhandledrejection", (ev) => reportErr("async", ev.reason));
 function tween(name, ms, step, done) {
   for (let i = ANIMS.length - 1; i >= 0; i--) if (ANIMS[i].name === name) ANIMS.splice(i, 1);
   const a = { name, t0: performance.now(), ms, step, done };
-  ANIMS.push(a); step(0);
+  ANIMS.push(a);
+  try { step(0); } catch (e) { reportErr("anim " + name, e); }
   return a;
 }
 function stepAnims(now) {
   for (let i = ANIMS.length - 1; i >= 0; i--) {
-    const a = ANIMS[i], k = clamp((now - a.t0) / a.ms, 0, 1);
-    a.step(k);
-    if (k >= 1) { ANIMS.splice(i, 1); if (a.done) a.done(); }
+    const a = ANIMS[i];
+    if (!a) continue;
+    const k = clamp((now - a.t0) / a.ms, 0, 1);
+    try { a.step(k); } catch (e) { reportErr("anim " + a.name, e); ANIMS.splice(i, 1); if (a.name === "board" || a.name === "stage") UI.trans = false; continue; }
+    if (k >= 1) { ANIMS.splice(i, 1); if (a.done) { try { a.done(); } catch (e) { reportErr("anim end " + a.name, e); UI.trans = false; } } }
   }
 }
 const easeOut = (k) => 1 - Math.pow(1 - k, 3);
@@ -1771,6 +1787,9 @@ function showLegs() {
   graphOptions().forEach(loadHist);
 }
 function openMarket(m) {
+  try { openMarketInner(m); } catch (e) { reportErr("open", e); UI.trans = false; }
+}
+function openMarketInner(m) {
   if (!m) return;
   stopSim();
   state.market = m; state.view = "market"; state.sel = null;
@@ -2496,6 +2515,9 @@ function refreshMarket() {
   });
 }
 function refresh() {
+  try { refreshAll(); } catch (e) { reportErr(inMarket() ? "market view" : "lobby", e); }
+}
+function refreshAll() {
   if (!UI.lobby || !UI.game) return;
   if (!UI.trans) {
     UI.lobby.setAttribute("visible", !inMarket());
@@ -3363,7 +3385,10 @@ window.TM = {
   state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepFollow(now); stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); stepHands(now); stepBall(now); },
+  frame: (now) => {
+    [["follow", stepFollow], ["physics", stepPhysics], ["grab", stepGrab], ["anims", stepAnims], ["piles", (n) => PILES.forEach((p) => p.update(n))],
+     ["pulse", stepPulse], ["grok", stepOrb], ["hands", stepHands], ["ball", stepBall]].forEach(([tag, f]) => { try { f(now); } catch (e) { reportErr(tag, e); } });
+  },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
   hoverAt: (point, ray) => {
