@@ -2591,9 +2591,11 @@ async function wakeStart() {
   AI.starting = false;
 }
 function recStart() {
-  AI.chunks = [];
+  // each recorder fills its own list, so the last piece of one clip never lands at the start of the next
+  // (a clip that starts with a leftover piece is not a valid audio file, and ElevenLabs rejects it as corrupted)
+  const chunks = AI.chunks = [];
   const rec = AI.rec = new MediaRecorder(AI.stream, AI.mime ? { mimeType: AI.mime } : undefined);
-  rec.ondataavailable = (e) => { if (e.data && e.data.size) AI.chunks.push(e.data); };
+  rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
   rec.start(250);
   AI.recT0 = performance.now(); AI.speech = false; AI.speechMs = 0; AI.quietMs = 0;
 }

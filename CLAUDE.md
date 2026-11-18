@@ -228,6 +228,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Grok opened the Michigan game by voice, then stared blankly at the next question. Cause unknown (candidates: hidden speech-to-text error such as ElevenLabs credit running out, stuck in thinking/speaking, or voice not detected). Added `SETTINGS.grokDebug` (true while testing; set false for the demo): a small note under Grok shows "Heard: ... [mode]" or the error; every listening error is now shown; safety resets in stepOrb (thinking over 20 s, or speaking with no audio source for 2 s, go back to awake); AudioContext resumed before playback.
 
+- Nov 17: the debug note showed "Couldn't hear: ElevenLabs: file corrupted". Cause: `recStart` pushed data into the global AI.chunks, so the old recorder's final piece (fired after stop) landed at the start of the next clip, making it an invalid webm. Fixed by giving each recorder its own chunks array (closure). This explains "answers once, then stares".
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
