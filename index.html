@@ -2616,22 +2616,27 @@ function vadTick() {
   if (!AI.listening) return;
   const now = performance.now(), age = now - AI.recT0;
   if (AI.mode === "sleep") { if (age > 1500) recCut(false); return; }   // asleep: nothing is sent
+  // just after he finishes talking, his voice is still echoing: ignore it, then start a clean clip
+  if (now < (AI.deafUntil || 0)) return;
+  if (AI.freshClip) { AI.freshClip = false; return recCut(false); }
   const talking = AI.mode === "speaking";
   const lvl = analyserLevel(AI.micAn);
   AI.micLvl = lvl;
   // while he talks, his own voice can reach the microphone, so you have to be clearly louder than that to cut in
   const echo = talking && AI.outAn ? analyserLevel(AI.outAn) : 0;
-  const loud = lvl > AI.floor * 2 + 0.006 + (talking ? 0.02 + echo * 0.6 : 0);
+  const loud = lvl > AI.floor * 2 + 0.006 + (talking ? 0.035 + echo * 0.9 : 0);
   if (!loud && !talking) AI.floor = AI.floor * 0.97 + lvl * 0.03;      // learns how quiet the room is
-  if (loud) { AI.speechMs += 50; AI.quietMs = 0; if (AI.speechMs > (talking ? 320 : 220)) AI.speech = true; }
+  if (loud) { AI.speechMs += 50; AI.quietMs = 0; if (AI.speechMs > (talking ? 420 : 220)) AI.speech = true; }
   else { AI.quietMs += 50; if (!AI.speech) AI.speechMs = Math.max(0, AI.speechMs - 25); }
   if (talking) {
     if (AI.speech) { try { AI.src && AI.src.stop(); } catch (e) {} aiMode("awake"); }   // you cut in: he stops and listens
     else { if (age > 1500) recCut(false); return; }
   }
-  if (AI.speech && AI.quietMs > 650) return recCut(true);               // a sentence just ended: check it
-  if (AI.speech && age > 12000) return recCut(true);                    // a long one: check what we have
-  if (!AI.speech && age > 6000) recCut(false);                          // nothing said: start a fresh clip
+  if (AI.speech && (AI.quietMs > 600 || age > 12000)) {                // a sentence just ended (or a long one): check it
+    if (AI.mode === "awake") { aiMode("thinking"); AI.req = (AI.req || 0) + 1; }   // show right away that he caught it
+    return recCut(true);
+  }
+  if (!AI.speech && age > 3000) recCut(false);                          // nothing said: throw away the silence
   if (AI.speech) AI.awakeT = now;
   if (!AI.speech && now - AI.awakeT > 25000) aiMode("sleep");           // 25 quiet seconds: he dozes off
 }
@@ -2639,14 +2644,15 @@ async function handleClip(blob) {
   if (!blob || blob.size < 1500) return;
   let heard = "";
   try { heard = String((await aiPost("/stt", blob, false)).text || "").trim(); }
-  catch (e) { console.warn("listening:", e.message); aiNote("Couldn't hear: " + e.message); return; }
-  if (!heard) { if (S.grokDebug && AI.mode !== "sleep") aiNote("Heard nothing clear"); return; }
+  catch (e) { console.warn("listening:", e.message); aiNote("Couldn't hear: " + e.message); if (AI.mode === "thinking") aiMode("awake"); return; }
+  if (!heard) { if (S.grokDebug && AI.mode !== "sleep") aiNote("Heard nothing clear"); if (AI.mode === "thinking") aiMode("awake"); return; }
   if (S.grokDebug && AI.mode !== "sleep") aiNote("Heard: " + heard + "  [" + AI.mode + "]");
   if (AI.mode === "sleep" || AI.mode === "speaking") return;
   if (AI.pending) return aiSpeak(aiConfirm(heard), "awake");
   const m = heard.match(WAKE);
   const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "");
   if (q.split(/\s+/).filter(Boolean).length) aiAnswer(q);
+  else if (AI.mode === "thinking") aiMode("awake");
 }
 
 // ---------- talking ----------
@@ -2664,7 +2670,11 @@ function playBuffer(buf, after) {
   src.buffer = buf; src.playbackRate.value = 1.06;                      // a touch brighter and cuter
   src.connect(AI.outAn);
   AI.src = src;
-  src.onended = () => { if (AI.src === src) AI.src = null; if (after) after(); };
+  src.onended = () => {
+    if (AI.src === src) AI.src = null;
+    AI.deafUntil = performance.now() + 700; AI.freshClip = true;        // don't hear the tail of his own voice
+    if (after) after();
+  };
   src.start();
 }
 async function aiSpeak(text, then, id) {
@@ -2686,8 +2696,10 @@ async function aiAnswer(q) {
   const id = AI.req = (AI.req || 0) + 1;                                // a newer question replaces an older one
   aiMode("thinking");
   try {
+    if (S.grokDebug) aiNote("Asking Grok: " + q);
     const a = await aiPost("/ask", { question: q, context: aiContext() }, true);
-    if (id !== AI.req) return;
+    if (id !== AI.req) { if (S.grokDebug) aiNote("Skipped (a newer question came in)"); return; }
+    if (S.grokDebug) aiNote("Grok: " + (a.say || "(no words)") + (a.action ? "  [" + a.action.type + "]" : ""));
     const own = aiDo(a.action);
     await aiSpeak(own || a.say || "Hmm, I'm not sure about that one.", "awake", id);
   } catch (e) { if (id !== AI.req) return; console.warn("answer:", e.message); aiNote(e.message); aiMode("awake"); }

@@ -230,6 +230,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: the debug note showed "Couldn't hear: ElevenLabs: file corrupted". Cause: `recStart` pushed data into the global AI.chunks, so the old recorder's final piece (fired after stop) landed at the start of the next clip, making it an invalid webm. Fixed by giving each recorder its own chunks array (closure). This explains "answers once, then stares".
 
+- Nov 17: after the clip fix, Brian said Grok is slow (5 to 10 s before "Heard: ..." appears) and then does nothing. Changes (UNTESTED; page start checked): silent clips are thrown away every 3 s (was 6) so clips are short; end of sentence at 600 ms; the moment a sentence ends while awake he switches to thinking (and bumps AI.req); after his audio ends he is deaf for 700 ms and then starts a fresh clip (`deafUntil`, `freshClip`) so he does not hear his own voice; barge-in needs floor*2 + 0.041 + 0.9 x his level for 420 ms; empty or failed hearing returns him to awake. Debug note now shows each step: Heard, Asking Grok, Grok's reply (with action), Skipped, or the error.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
