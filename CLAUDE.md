@@ -242,6 +242,13 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: "open crypto" / "open commodities" did nothing after a game opened fine. Likely Grok sent {type:"open", name:"crypto"} (a market search) or a tab name that did not match exactly. `aiFindCat` now matches tabs loosely (ignores the/tab/section/markets, singular/plural, partial), and an "open" whose name matches a tab is treated as a category switch. UNTESTED.
 
+## Quest-style hand overlay (Nov 17; model load and shader compile checked on desktop, NOT seen in the headset)
+- Brian pasted a spec: thin soft white outline of the whole hand silhouette (finger gaps included), faint see-through fill, restrained glow, no skeleton/dots/wireframe, follows bends and pinches, fade out/in with tracking, brighter while pinching; do not fake it by connecting landmarks.
+- Constraint: WebXR in the Quest browser gives 25 joint poses per hand, no mesh or segmentation and no camera image. So the overlay uses a real skinned hand mesh: the Oculus hand GLB (cdn.aframe.io/controllers/oculus-hands/v4/left.glb and right.glb, CORS *), posed like A-Frame's hand-tracking-controls does (bones[i].position/quaternion = joint i pose in room space, armature transform reset).
+- xr-input now stores joint orientations (H.quats) and calls TM.handPose(handedness, joints, quats) per tracked hand, and handPose(side, null) for hands not seen this frame.
+- `handPose`/`stepHands`/`handMaterials`/`loadHand`: four SkinnedMesh copies sharing the skeleton: depth pre-pass (order 20), glow hull (back faces, pushed out 3.4 mm, alpha 0.14), line hull (1.1 mm, alpha 0.55), fill (fresnel, alpha 0.06 to 0.20, light grey). uA = fade x (1 + 0.6 x pinch). Fade in 10/s, out 6/s. Smoothing: lerp/slerp with alpha 0.45 to 1 by movement. If the model fails to load, the old capsule glove (`drawGlove`) is the fallback.
+- Limits to tell judges: the model is a generic hand shape, not the user's exact hand; outline thickness is a fixed world size.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

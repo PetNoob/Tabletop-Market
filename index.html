@@ -249,7 +249,7 @@ AFRAME.registerComponent("xr-input", {
     const session = xr && xr.getSession && xr.getSession();
     const frame = sceneEl.frame, ref = xr && xr.getReferenceSpace && xr.getReferenceSpace();
     let li = 0, hi = 0;
-    this.tips = {}; this.pinchSeen = {};
+    this.tips = {}; this.pinchSeen = {}; this.seenHands = {};
     if (window.TM) window.TM.hoverBegin();
     if (session && frame && ref) {
       for (const src of session.inputSources) {
@@ -258,8 +258,9 @@ AFRAME.registerComponent("xr-input", {
           for (const space of src.hand.values()) {
             const jp = frame.getJointPose(space, ref);
             if (!jp) { ok = false; break; }
-            const p = jp.transform.position;
+            const p = jp.transform.position, q = jp.transform.orientation;
             H.joints[i].set(p.x, p.y, p.z); H.dots[i].position.copy(H.joints[i]);
+            (H.quats || (H.quats = Array.from({ length: 25 }, () => new AFRAME.THREE.Quaternion())))[i].set(q.x, q.y, q.z, q.w);
             i++; if (i >= 25) break;
           }
           if (ok && i === 25) {
@@ -269,7 +270,8 @@ AFRAME.registerComponent("xr-input", {
             });
             H.geo.attributes.position.needsUpdate = true;
             H.group.visible = SETTINGS.handStyle === "outline"; hi++;
-            if (window.TM && window.TM.drawGlove) window.TM.drawGlove(hi - 1, H.joints);
+            if (window.TM && window.TM.handPose) window.TM.handPose(src.handedness, H.joints, H.quats);
+            this.seenHands[src.handedness] = true;
             if (window.TM && window.TM.handTouch) window.TM.handTouch(hi - 1, H.joints);
             this.tips[src.handedness] = H.joints[9].clone();
             if (window.TM) window.TM.fingerAt(src.handedness, H.joints[9]);
@@ -299,7 +301,8 @@ AFRAME.registerComponent("xr-input", {
       else if (this.rayFrom(frame, this.carry.src)) window.TM.grabMove(this.tmp.copy(this.origin).addScaledVector(this.dir, this.carry.dist));
     }
     for (; li < 2; li++) this.lines[li].visible = false;
-    for (; hi < 2; hi++) { this.hands[hi].group.visible = false; if (window.TM && window.TM.drawGlove) window.TM.drawGlove(hi, null); }
+    for (; hi < 2; hi++) this.hands[hi].group.visible = false;
+    if (window.TM && window.TM.handPose) ["left", "right"].forEach((s) => { if (!this.seenHands[s]) window.TM.handPose(s, null); });
     if (window.TM) window.TM.frame(performance.now());
   }
 });
@@ -2062,10 +2065,10 @@ function stepPulse(now) {
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => grokTouch(i, j),
+  state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => grokTouch(i, j), handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); },
+  frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); stepHands(now); },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
   hoverAt: (point, ray) => {
@@ -3050,6 +3053,101 @@ function drawGlove(i, joints) {
     cp.setMatrixAt(k, GM); cc.setMatrixAt(k, GM);
   });
   h.parts.forEach((m) => { m.instanceMatrix.needsUpdate = true; });
+}
+
+/* ---------- hands: a soft, Quest-style overlay ----------
+   WebXR gives each hand as 25 joint poses (position and rotation). It does not give a hand outline or a camera image,
+   so a faithful silhouette needs a hand-shaped mesh: we load the Oculus hand model (a skinned mesh, hosted by A-Frame)
+   and pose its 25 bones from the joints every frame, like the Quest system does. Then three passes:
+     1. depth only, so the hand hides what is behind it and fingers never show through each other;
+     2. an outline: the mesh pushed out a little along its surface, back faces only, so it shows just outside the
+        edge, including the gaps between fingers; a second, wider and fainter copy is the soft glow;
+     3. a faint see-through fill that is a little brighter toward the edges.
+   It fades out when tracking is lost, fades back in when it returns, and brightens slightly while you pinch.
+   If the model cannot load, the older simple glove (drawGlove) is used instead. */
+const HANDS = { left: null, right: null, last: 0 };
+const HAND_URL = "https://cdn.aframe.io/controllers/oculus-hands/v4/";
+function handMaterials() {
+  const uA = { value: 0 };                                            // overall strength: fade times pinch boost
+  const pre = new THREE.MeshBasicMaterial({ colorWrite: false });
+  const hull = (thick, alpha, key) => {
+    const m = new THREE.MeshBasicMaterial({ color: 0xeef2f6, transparent: true, depthWrite: false, side: THREE.BackSide });
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.uA = uA; sh.uniforms.uThick = { value: thick };
+      sh.vertexShader = "uniform float uThick;\n" + sh.vertexShader.replace("#include <skinning_vertex>",
+        "#include <skinning_vertex>\n  transformed += normalize(objectNormal) * uThick;");
+      sh.fragmentShader = "uniform float uA;\n" + sh.fragmentShader.replace("#include <dithering_fragment>",
+        "#include <dithering_fragment>\n  gl_FragColor.a = " + alpha.toFixed(3) + " * uA;");
+    };
+    m.customProgramCacheKey = () => "tm-hand-" + key;
+    return m;
+  };
+  const fill = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, depthWrite: false, roughness: 1 });
+  fill.onBeforeCompile = (sh) => {
+    sh.uniforms.uA = uA;
+    sh.fragmentShader = "uniform float uA;\n" + sh.fragmentShader.replace("#include <dithering_fragment>", [
+      "#include <dithering_fragment>",
+      "  float tmEdge = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);",
+      "  gl_FragColor = vec4(vec3(0.86, 0.89, 0.93), (0.06 + 0.14 * tmEdge) * uA);"].join("\n"));
+  };
+  fill.customProgramCacheKey = () => "tm-hand-fill";
+  return { uA, pre, line: hull(0.0011, 0.55, "line"), glow: hull(0.0034, 0.14, "glow"), fill };
+}
+function loadHand(side) {
+  const h = HANDS[side] = { ready: false, failed: false, a: 0, target: 0, pinch: 0, mats: handMaterials(),
+                            sp: Array.from({ length: 25 }, () => new THREE.Vector3()),
+                            sq: Array.from({ length: 25 }, () => new THREE.Quaternion()), fresh: true };
+  if (!THREE.GLTFLoader) { h.failed = true; return h; }
+  new THREE.GLTFLoader().load(HAND_URL + side + ".glb", (g) => {
+    const mesh = g.scene.children[0], sk = g.scene.getObjectByProperty("type", "SkinnedMesh");
+    if (!mesh || !sk) { h.failed = true; return; }
+    mesh.position.set(0, 0, 0); mesh.rotation.set(0, 0, 0);          // the bones are posed directly in room space
+    h.bones = sk.skeleton.bones;
+    sk.material = h.mats.pre; sk.renderOrder = 20; sk.frustumCulled = false;
+    const copy = (mat, order) => {
+      const m = sk.clone(); m.bind(sk.skeleton, sk.bindMatrix);
+      m.material = mat; m.renderOrder = order; m.frustumCulled = false;
+      sk.parent.add(m); return m;
+    };
+    copy(h.mats.glow, 21); copy(h.mats.line, 22); copy(h.mats.fill, 23);
+    mesh.visible = false;
+    document.querySelector("a-scene").object3D.add(mesh);
+    h.root = mesh; h.ready = true;
+  }, undefined, (err) => { console.warn("hand model:", err); h.failed = true; });
+  return h;
+}
+// called every frame for each tracked hand (joints and rotations), or with null when that hand is not tracked
+function handPose(side, joints, quats) {
+  if (S.handStyle !== "glove" || (side !== "left" && side !== "right")) return;
+  const h = HANDS[side] || loadHand(side), idx = side === "left" ? 0 : 1;
+  if (!joints) { h.target = 0; if (h.failed) drawGlove(idx, null); return; }
+  h.target = 1;
+  if (!h.ready) { if (h.failed) drawGlove(idx, joints); return; }
+  // light smoothing: steady when still, quick when moving, so it neither jitters nor lags
+  const n = Math.min(25, h.bones.length);
+  for (let i = 0; i < n; i++) {
+    const a = h.fresh ? 1 : clamp(0.45 + joints[i].distanceTo(h.sp[i]) * 60, 0.45, 1);
+    h.sp[i].lerp(joints[i], a);
+    if (quats && quats[i]) { if (h.fresh) h.sq[i].copy(quats[i]); else h.sq[i].slerp(quats[i], a); }
+    h.bones[i].position.copy(h.sp[i]); h.bones[i].quaternion.copy(h.sq[i]);
+  }
+  h.fresh = false;
+  // pinch: thumb tip near index tip
+  const pinch = clamp((0.035 - joints[4].distanceTo(joints[9])) / 0.02, 0, 1);
+  h.pinch += (pinch - h.pinch) * 0.3;
+}
+// every frame: fade in and out, and the pinch glow
+function stepHands(now) {
+  const dt = Math.min(0.05, Math.max(0.001, (now - (HANDS.last || now)) / 1000));
+  HANDS.last = now;
+  ["left", "right"].forEach((side) => {
+    const h = HANDS[side];
+    if (!h || !h.ready) return;
+    h.a += (h.target - h.a) * Math.min(1, dt * (h.target > h.a ? 10 : 6));
+    if (h.a < 0.01 && h.target === 0) h.fresh = true;                 // next time it appears, start from the new pose
+    h.mats.uA.value = h.a * (1 + 0.6 * h.pinch);
+    h.root.visible = h.a > 0.01;
+  });
 }
 
 arcInit();
