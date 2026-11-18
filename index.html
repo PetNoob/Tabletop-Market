@@ -224,8 +224,9 @@ AFRAME.registerComponent("xr-input", {
     let grab = this.ray.intersectObject(handle.object3D, true).length > 0;
     const tip = this.tips[e.inputSource.handedness];
     if (!grab && e.inputSource.hand && tip) {
-      handle.object3D.getWorldPosition(this.tmp);
-      grab = this.tmp.distanceTo(tip) < 0.12;
+      // a pinch on or right around the handle itself (it sits close to the category bar, so not a wide zone)
+      const lp = handle.object3D.worldToLocal(this.tmp.copy(tip));
+      grab = Math.abs(lp.x) < 0.1 && Math.abs(lp.y) < 0.035 && Math.abs(lp.z) < 0.05;
     }
     if (grab) {
       this.drag = { src: e.inputSource, offset: (window.TM ? window.TM.phys.target : market.object3D.position).clone().sub(this.origin) };
@@ -974,7 +975,7 @@ function build() {
   UI.arcLine = label(bal, "", 0, -0.058, 0.006, 0.0048, C.dim);
 
   // handle to move everything (always there)
-  UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 -0.006 0.275", rot: "-90 0 0", cls: "clickable" });
+  UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 0.012 0.222", rot: "-90 0 0", cls: "clickable" });
   UI.handle.setAttribute("id", "handle");
 
   buildLobby(market);
@@ -1188,7 +1189,7 @@ function featPick(k) {
 
 // the category bar: its own strip just under the panel, scrolls sideways with its arrows
 function buildBar(L) {
-  const bar = UI.bar = mk("a-entity", { position: "0 -0.265 0.004" }, L);
+  const bar = UI.bar = mk("a-entity", { position: "0 -0.272 0.004" }, L);
   slab(bar, LW, 0.042, 0.01, "#0c0e11", { r: 0.021, opacity: 1 });
   rim(bar, LW, 0.042, 0.021);
   UI.barL = button(bar, "<", -0.347, 0, 0.03, 0.03, () => barShift(-1), { size: 0.008, r: 0.015, color: FIELD, enabled: () => inLobby() && !!UI.barMoreL });
@@ -1747,7 +1748,7 @@ function openMarket(m) {
 }
 // the card you pressed lifts off and grows into the board; then it fades and the market is underneath
 const COURT_SCALE = 0.85;   // size of the table and court (1 = original)
-const STAGE_LOBBY = { y: 0.29, z: 0.15, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
+const STAGE_LOBBY = { y: 0.30, z: 0.08, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
 function setStage(k) {
   state.stage = k;
   const mix = (a, b) => a + (b - a) * k, o = UI.lobby.object3D;
@@ -1758,6 +1759,8 @@ function setStage(k) {
   b.scale.set((0.55 + 0.45 * g) * COURT_SCALE, 1, (0.55 + 0.45 * g) * COURT_SCALE);                 // the table grows out from its middle
   b.position.y = -0.015 * (1 - k);
   if (UI.bar) UI.bar.object3D.visible = k < 0.5;
+  // the grab handle: just under the category bar in the lobby, at the table's front edge in a market
+  if (UI.handle) UI.handle.object3D.position.set(0, 0.012 - 0.018 * k, 0.222 + 0.053 * k);
 }
 // opening a market: the list slides back and the table grows in, then the pressed card grows into the board
 function growIntoBoard(card, after) {
