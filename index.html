@@ -2587,7 +2587,7 @@ function grabBegin(i, frac, point) {
 function settleCash(i, frac, proceeds, ref) {
   const pile = PILES[i], p = pickAt(i);
   if (!p) return;
-  sfx("chaching", 0.6);
+  if (performance.now() - (SFX.cashT || 0) > 2000) { SFX.cashT = performance.now(); sfx("chaching", 0.55); }   // same as Add money, once
   logActivity({ side: "Sold", title: p.pos.title || (state.market && state.market.title) || "", what: (p.pos.what || "") + " " + Math.max(1, Math.round(frac * 100)) + "%",
                 amount: proceeds, ticker: state.market && state.market.ticker, ref, sim: state.sim });
   setTimeout(saveTestState, 0);
@@ -3735,9 +3735,9 @@ function stepNets(dt) {
    (original pixel textures drawn in code). Touch a block and it breaks: pixel shards burst out, the block turns
    into one or two ingots, and the blocks above it drop down. Ingots are heavy: they tumble, thud, barely bounce,
    slide a little and settle flat, land on top of the mountain, slosh when the table moves, and can be flicked. */
-const MINE = { el: null, on: false, metal: "", B: 0.011, X0: 0, Z0: 0, NI: 9, NJ: 7, cols: [], blocks: [], inst: null,
+const MINE = { el: null, on: false, metal: "", B: 0.016, X0: 0, Z0: 0, NI: 7, NJ: 5, cols: [], blocks: [], inst: null,
                ingots: [], ingInst: null, shards: [], shardInst: null, mats: {}, last: 0, hands: [], dirty: true };
-const ING_W = 0.015, ING_H = 0.0055, ING_D = 0.0078, ING_CAP = 120, SHARD_CAP = 90;
+const ING_W = 0.019, ING_H = 0.007, ING_D = 0.0098, ING_CAP = 120, SHARD_CAP = 90;
 const METALS = { iron: ["#d9dbde", "#b9bcc1", "#f2f3f5", "#8d9097"], copper: ["#c8703c", "#a85a2f", "#e6915c", "#4fa38a"],
                  gold: ["#f2c94c", "#d9a92e", "#fff0a0", "#b8862a"], silver: ["#c8ced8", "#a9b0bc", "#eef1f6", "#7d8594"] };
 function metalKind(m) {
@@ -3823,7 +3823,7 @@ function mineShow(metal) {
   const rnd = seeded(metal.length * 37 + 11);
   for (let i = 0; i < M.NI; i++) for (let j = 0; j < M.NJ; j++) {
     const dx = (i + 0.5) / M.NI - 0.5, dz = (j + 0.5) / M.NJ - 0.5, d = Math.hypot(dx * 1.1, dz * 1.3);
-    const h = Math.max(0, Math.round(6.2 * Math.pow(Math.max(0, 1 - d * 1.75), 1.15) + (rnd() - 0.5) * 1.2));
+    const h = Math.max(0, Math.round(4.6 * Math.pow(Math.max(0, 1 - d * 1.6), 1.1) + (rnd() - 0.5) * 0.9));
     const col = []; col.i = i; col.j = j;
     for (let k = 0; k < h; k++) col.push({ off: 0.06 + k * 0.012 + rnd() * 0.02, v: 0 });  // they drop in when the mountain appears
     M.cols.push(col);
