@@ -31,8 +31,28 @@
 
 const ALLOWED_ORIGINS = ["https://petnoob.github.io", "http://localhost:8123"];
 
+// the app's sound effects: name -> [what ElevenLabs should make, length in seconds (0.5 to 22)]
+// change SFX_VERSION to make them all again (for example after editing a description)
+const SFX_VERSION = "v1";
+const SFX_LIST = {
+  coin:     ["a single gold coin clinking onto a wooden table, short and crisp", 0.5],
+  coins:    ["a handful of metal coins spilling and jingling onto a table", 1.2],
+  bounce:   ["a basketball bouncing once on a hardwood court, indoor gym", 0.5],
+  kick:     ["a soccer ball being kicked, short soft thump", 0.5],
+  puck:     ["a hockey stick hitting a puck that slides on ice, short", 0.6],
+  net:      ["a ball hitting the back of a goal net, soft swish", 0.7],
+  smash:    ["a solid metal block breaking apart, chunky clank with small debris", 0.6],
+  ingot:    ["a heavy metal ingot dropping on stone, dull thud clank", 0.5],
+  goo:      ["thick black oil gushing up and splatting, gooey squelch", 0.9],
+  chaching: ["a cash register cha-ching with a bell, short and bright", 0.9],
+  pick:     ["a soft satisfying confirmation chime for an app, two notes rising", 0.5],
+  click:    ["a soft subtle button click for a user interface", 0.5],
+  door:     ["a heavy steel vault door thudding to a stop, deep metallic clunk", 0.8],
+  whoosh:   ["a quick soft whoosh, short transition sound", 0.5]
+};
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const origin = request.headers.get("Origin") || "";
     const cors = {
       "Access-Control-Allow-Origin": ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0],
@@ -63,6 +83,31 @@ export default {
         h.set("Content-Type", r.headers.get("Content-Type") || "image/png");
         h.set("Cache-Control", "public, max-age=86400");
         return new Response(r.body, { status: 200, headers: h });
+      }
+
+      // ---------- sound effects, made by ElevenLabs' sound generator ----------
+      // Each sound is generated ONCE from a short description, then kept in Cloudflare's cache for a year,
+      // so playing it again costs nothing. Only the names below can be asked for.
+      if (path === "/sfx") {
+        const name = new URL(request.url).searchParams.get("n") || "", def = SFX_LIST[name];
+        if (!def) return reply({ error: "Unknown sound" }, 404);
+        const cache = caches.default, key = new Request("https://tabletop-sfx.cache/" + name + "-" + SFX_VERSION);
+        const hit = await cache.match(key);
+        const send = (buf) => { const h = new Headers(cors); h.set("Content-Type", "audio/mpeg"); h.set("Cache-Control", "public, max-age=604800"); return new Response(buf, { status: 200, headers: h }); };
+        if (hit) return send(await hit.arrayBuffer());
+        if (!env.ELEVENLABS_API_KEY) return reply({ error: "ElevenLabs key is not set up" }, 503);
+        const ip = request.headers.get("CF-Connecting-IP") || "?";
+        if (!rateOk("sfx:" + ip, 60)) return reply({ error: "Too many requests, try again in a bit" }, 429);
+        const r = await fetch("https://api.elevenlabs.io/v1/sound-generation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "xi-api-key": env.ELEVENLABS_API_KEY, "Accept": "audio/mpeg" },
+          body: JSON.stringify({ text: def[0], duration_seconds: def[1], prompt_influence: 0.6 })
+        });
+        if (!r.ok) return reply({ error: "ElevenLabs: " + (await r.text()).slice(0, 160) }, 502);
+        const buf = await r.arrayBuffer();
+        const store = new Response(buf.slice(0), { headers: { "Content-Type": "audio/mpeg", "Cache-Control": "public, max-age=31536000" } });
+        if (ctx && ctx.waitUntil) ctx.waitUntil(cache.put(key, store)); else await cache.put(key, store);
+        return send(buf);
       }
 
       // ---------- the voice assistant (public, but rate limited so nobody can run up the bill) ----------
@@ -156,7 +201,7 @@ export default {
 
       if (path === "/" || path === "/status") {
         return reply({ ok: true, tradingConfigured: configured, unlocked, maxOrderUsd: maxUsd, sandbox: env.GEMINI_SANDBOX === "1",
-                       voice: !!env.ELEVENLABS_API_KEY, grok: !!env.XAI_API_KEY });
+                       voice: !!env.ELEVENLABS_API_KEY, grok: !!env.XAI_API_KEY, sfx: !!env.ELEVENLABS_API_KEY });
       }
 
       // everything below spends or reveals the owner's account, so it needs the passcode
