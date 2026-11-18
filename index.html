@@ -1880,13 +1880,13 @@ function courtShow(kind, cols, coin) {
     rims.forEach((r) => { if (r.material && r.material.emissive) { r.material.emissive.copy(r.material.color); r.material.emissiveIntensity = glow; } });
   };
   if (!kind) {
-    ballShow(""); vaultShow(""); mineShow("");
+    ballShow(""); vaultShow(""); mineShow(""); oilShow(false);
     tween("court", 380, (k) => { const a = 1 - easeOut(k); FLOOR.u.value = a; if (was === "basketball") setHoops(a, 0);
                                  if (NETS.grp) NETS.grp.scale.set(1, Math.max(0.0001, a), 1); },
           () => { FLOOR.mesh.visible = false; UI.hoops.setAttribute("visible", false); netsShow(""); });
     return;
   }
-  FLOOR.mat.map = floorTex(kind, kind === "crypto" || kind === "metal" ? null : cols);
+  FLOOR.mat.map = floorTex(kind, kind === "crypto" || kind === "metal" || kind === "oil" ? null : cols);
   FLOOR.u.value = 0; FLOOR.mesh.visible = true;
   UI.hoops.setAttribute("visible", kind === "basketball");
   netsShow(kind, cols);
@@ -1895,7 +1895,7 @@ function courtShow(kind, cols, coin) {
     FLOOR.u.value = easeOut(span(k, 0.05, 0.65));
     if (kind === "basketball") setHoops(easeBack(span(k, 0.45, 1)), 1.2 * Math.sin(Math.PI * span(k, 0.7, 1)));
     if (NETS.grp) NETS.grp.scale.set(1, Math.max(0.0001, easeBack(span(k, 0.45, 1))), 1);   // the goals rise too
-  }, () => (kind === "crypto" ? vaultShow(coin) : kind === "metal" ? mineShow(coin) : ballShow(kind)));
+  }, () => (kind === "crypto" ? vaultShow(coin) : kind === "metal" ? mineShow(coin) : kind === "oil" ? oilShow(true) : ballShow(kind)));
 }
 function backToLobby() {
   grabReset();
@@ -3064,7 +3064,7 @@ function floorTex(kind, cols) {
   if (keys.length >= 6) { FLOOR.tex[keys[0]].dispose(); delete FLOOR.tex[keys[0]]; }
   const cv = document.createElement("canvas"); cv.width = FW; cv.height = FH;
   const g = cv.getContext("2d"), rnd = seeded(kind.length * 977 + 13);
-  ({ basketball: paintHardwood, soccer: paintPitch, hockey: paintRink, football: paintGridiron, baseball: paintDiamond, crypto: paintVaultFloor, metal: paintQuarry }[kind] || paintHardwood)(g, rnd, cols);
+  ({ basketball: paintHardwood, soccer: paintPitch, hockey: paintRink, football: paintGridiron, baseball: paintDiamond, crypto: paintVaultFloor, metal: paintQuarry, oil: paintOilField }[kind] || paintHardwood)(g, rnd, cols);
   const tx = new THREE.CanvasTexture(cv);
   tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8;
   return (FLOOR.tex[key] = tx);
@@ -3410,7 +3410,7 @@ function cryptoCoin(m) {
   return "coin";
 }
 // the board a market gets: a sport's floor, the crypto vault, or nothing
-const boardKind = (m) => sportKind(m) || (cryptoCoin(m) ? "crypto" : metalKind(m) ? "metal" : "");
+const boardKind = (m) => sportKind(m) || (cryptoCoin(m) ? "crypto" : metalKind(m) ? "metal" : oilKind(m) ? "oil" : "");
 
 /* ---------- the crypto floor: brushed dark metal, split in two, YES and NO ---------- */
 function paintVaultFloor(g, rnd) {
@@ -3940,15 +3940,192 @@ function stepMine(now) {
   M.shardInst.count = M.shards.length; M.shardInst.instanceMatrix.needsUpdate = true;
 }
 
+/* ---------- oil markets: a Texas oil field ----------
+   Dusty dirt with cracks, tire tracks and oil stains, and three pumpjacks ("nodding donkeys") that nod all the time:
+   a crank with counterweights turns, pitman arms rock the walking beam, the horse head pumps the rod in and out of
+   the wellhead. Every few seconds a well spits black goo (touching a wellhead makes it gush). The goo has physics:
+   glossy blobs arc up, fall, splat with almost no bounce, flatten into puddles, slide sluggishly, slosh when the
+   table moves, and can be pushed around with your fingers. */
+const OIL = { el: null, on: false, pumps: [], blobs: [], inst: null, last: 0, hands: [] };
+const GOO_CAP = 150;
+const PUMP_SPOTS = [[-0.13, -0.07, 0.3, 1.0], [0.08, -0.075, -0.4, 0.82], [-0.02, 0.07, 2.9, 1.15]];   // x, z, facing, speed
+function oilKind(m) {
+  if (!m || !/commodit/i.test(m.category || "")) return "";
+  const s = ((m.title || "") + " " + (m.sub || "") + " " + (m.tags || "")).toLowerCase();
+  return /\boil\b|crude|brent|\bwti\b|gasoline|natural gas|petroleum/.test(s) ? "oil" : "";
+}
+// where on the floor picture a spot on the table lands (for the stains under the wells)
+const floorUV = (x, z) => [(x / (0.31 * COURT_SCALE) + 1) / 2 * FW, (z / (0.17 * COURT_SCALE) + 1) / 2 * FH];
+function paintOilField(g, rnd) {
+  const gr = g.createLinearGradient(0, 0, FW, FH); gr.addColorStop(0, "#b48a5a"); gr.addColorStop(1, "#9a7148");
+  g.fillStyle = gr; g.fillRect(0, 0, FW, FH);
+  g.globalAlpha = 0.12;                                                                 // dust and pebbles
+  for (let k = 0; k < 14000; k++) { g.fillStyle = rnd() < 0.5 ? "#5e4126" : "#e2c08f"; const s = 1 + rnd() * 2.5; g.fillRect(rnd() * FW, rnd() * FH, s, s); }
+  g.globalAlpha = 0.35; g.strokeStyle = "#5a3d22"; g.lineWidth = 1.2;                   // dry cracks
+  for (let k = 0; k < 40; k++) {
+    let x = rnd() * FW, y = rnd() * FH; g.beginPath(); g.moveTo(x, y);
+    for (let s = 0; s < 6; s++) { x += (rnd() - 0.5) * 50; y += (rnd() - 0.5) * 50; g.lineTo(x, y); }
+    g.stroke();
+  }
+  g.globalAlpha = 0.18; g.strokeStyle = "#4a3320"; g.lineWidth = 9;                     // tire tracks
+  [[0, FH * 0.55], [0, FH * 0.55 + 26]].forEach(([x0, y0]) => { g.beginPath(); g.moveTo(x0, y0); g.bezierCurveTo(FW * 0.3, y0 - 120, FW * 0.6, y0 + 140, FW, y0 - 40); g.stroke(); });
+  g.globalAlpha = 1;
+  PUMP_SPOTS.forEach(([x, z, yaw]) => {                                                  // dark oil stains around each well
+    const [u, v] = floorUV(x + Math.cos(yaw) * 0.032, z - Math.sin(yaw) * 0.032);
+    const st = g.createRadialGradient(u, v, 2, u, v, 46); st.addColorStop(0, "rgba(10,8,6,0.85)"); st.addColorStop(0.6, "rgba(20,14,8,0.4)"); st.addColorStop(1, "rgba(20,14,8,0)");
+    g.fillStyle = st; g.beginPath(); g.ellipse(u, v, 46, 30, rnd() * 3, 0, Math.PI * 2); g.fill();
+  });
+  sheen(g, 0.1);
+  g.lineWidth = 3; g.strokeStyle = "rgba(255,255,255,0.25)"; g.strokeRect(18, 18, FW - 36, FH - 36);
+}
+function buildPump(x, z, yaw, speed) {
+  const p = { grp: new THREE.Group(), phase: Math.random() * 6.3, speed, next: performance.now() + 1500 + Math.random() * 4000 };
+  p.grp.position.set(x, FLOOR_Y, z); p.grp.rotation.y = yaw;
+  const steel = new THREE.MeshStandardMaterial({ color: 0x2b2f35, metalness: 0.6, roughness: 0.45 });
+  const orange = new THREE.MeshStandardMaterial({ color: 0xe07b28, metalness: 0.3, roughness: 0.5 });
+  const red = new THREE.MeshStandardMaterial({ color: 0xb3261e, metalness: 0.3, roughness: 0.5 });
+  const box = (w, h, d, px, py, pz, mat, parent) => { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat || steel); b.position.set(px, py, pz); (parent || p.grp).add(b); return b; };
+  box(0.075, 0.003, 0.02, -0.002, 0.0015, 0);                                            // skid base
+  const PIV = 0.044;
+  [-1, 1].forEach((s) => {                                                               // the A-frame post
+    const leg = box(0.0028, PIV * 1.08, 0.0028, 0, PIV / 2, s * 0.006);
+    leg.rotation.x = s * 0.14;
+    const brace = box(0.0022, PIV * 0.9, 0.0022, 0.009, PIV * 0.45, s * 0.005); brace.rotation.z = 0.3;
+  });
+  // the walking beam with the horse head at the front, pivoting on top of the post
+  p.beam = new THREE.Group(); p.beam.position.set(0, PIV, 0); p.grp.add(p.beam);
+  box(0.064, 0.0045, 0.0035, 0.002, 0, 0, steel, p.beam);
+  const head = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.006, 16, 1, false, -0.55, 1.1), orange);
+  head.rotation.x = Math.PI / 2; head.position.set(0.02, 0, 0); p.beam.add(head);       // a curved slice: the horse head
+  // gearbox and the turning crank with counterweights at the back
+  const CX = -0.026, CY = 0.014;
+  box(0.012, 0.012, 0.012, CX, CY, 0, red);
+  p.crank = new THREE.Group(); p.crank.position.set(CX, CY, 0); p.grp.add(p.crank);
+  [-1, 1].forEach((s) => {
+    box(0.016, 0.003, 0.0018, 0.004, 0, s * 0.0075, steel, p.crank);
+    box(0.008, 0.008, 0.0022, 0.012, 0, s * 0.0078, red, p.crank);                       // counterweights
+  });
+  // pitman arms (crank pin to the back of the beam) and the rod into the wellhead
+  p.pitman = [-1, 1].map((s) => box(0.0018, 1, 0.0018, 0, 0, s * 0.0075));
+  p.rod = new THREE.Mesh(new THREE.CylinderGeometry(0.0009, 0.0009, 1, 6), new THREE.MeshStandardMaterial({ color: 0xcfd3d8, metalness: 0.9, roughness: 0.2 }));
+  p.grp.add(p.rod);
+  const well = new THREE.Mesh(new THREE.CylinderGeometry(0.003, 0.004, 0.012, 12), steel); well.position.set(0.033, 0.006, 0); p.grp.add(well);
+  const flange = new THREE.Mesh(new THREE.CylinderGeometry(0.0055, 0.0055, 0.0015, 12), red); flange.position.set(0.033, 0.009, 0); p.grp.add(flange);
+  p.wellTop = new THREE.Vector3(0.033, 0.013, 0);
+  p.CX = CX; p.CY = CY; p.PIV = PIV;
+  return p;
+}
+function oilShow(on) {
+  const O = OIL;
+  if (!O.el) {
+    O.el = mk("a-entity", {}, UI.game);
+    PUMP_SPOTS.forEach(([x, z, yaw, sp]) => { const p = buildPump(x, z, yaw, sp); O.el.object3D.add(p.grp); O.pumps.push(p); });
+    O.inst = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 8),
+      new THREE.MeshStandardMaterial({ color: 0x060607, roughness: 0.12, metalness: 0.25 }), GOO_CAP);
+    O.inst.count = 0; O.inst.frustumCulled = false; O.inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage); O.el.object3D.add(O.inst);
+  }
+  O.blobs.length = 0; O.inst.count = 0;
+  O.on = !!on; O.el.object3D.visible = O.on;
+  if (O.on) O.pumps.forEach((p, i) => { p.grp.scale.setScalar(0.001); p.next = performance.now() + 1200 + i * 900; });
+  if (O.on) tween("oil", 650, (k) => O.pumps.forEach((p) => p.grp.scale.setScalar(Math.max(0.001, easeBack(k)))));
+}
+// a gush of goo out of one well
+function gush(p, strength) {
+  const O = OIL, mkt = O.el.object3D, top = mkt.worldToLocal(p.grp.localToWorld(p.wellTop.clone()));   // its own copy (spawns happen over time)
+  const n = Math.round(9 + Math.random() * 8 * (strength || 1));
+  for (let i = 0; i < n; i++) setTimeout(() => {
+    if (!O.on) return;
+    let b;
+    if (O.blobs.length < GOO_CAP) { b = { p: new THREE.Vector3(), v: new THREE.Vector3(), r: 0, flat: 0, rest: false }; O.blobs.push(b); }
+    else { b = O.blobs.shift(); O.blobs.push(b); b.rest = false; }
+    b.r = 0.0028 + Math.random() * 0.0032; b.flat = 0;
+    b.p.copy(top); b.p.y += 0.002;
+    const a = Math.random() * Math.PI * 2, out = 0.05 + Math.random() * 0.18;
+    b.v.set(Math.cos(a) * out, (0.55 + Math.random() * 0.45) * (strength || 1), Math.sin(a) * out);
+  }, i * 28);
+}
+const ov1 = new THREE.Vector3(), ov2 = new THREE.Vector3(), oM = new THREE.Matrix4(), oS = new THREE.Vector3(), oQ = new THREE.Quaternion(), oUp = new THREE.Vector3(0, 1, 0);
+function stepOil(now) {
+  const O = OIL, dt0 = Math.min(0.05, Math.max(0.001, (now - (O.last || now)) / 1000));
+  O.last = now;
+  if (!O.on || !inMarket()) return;
+  // the pumpjacks nod: crank turns, beam rocks, rod moves in the well
+  O.pumps.forEach((p) => {
+    p.phase += dt0 * 1.9 * p.speed;
+    const th = 0.24 * Math.sin(p.phase);
+    p.beam.rotation.z = th;
+    p.crank.rotation.z = -p.phase;
+    const pin = ov1.set(p.CX + Math.cos(-p.phase) * 0.012, p.CY + Math.sin(-p.phase) * 0.012, 0);
+    const back = ov2.set(-0.03 * Math.cos(th), p.PIV - 0.03 * Math.sin(th), 0);          // back end of the beam
+    p.pitman.forEach((arm) => {
+      const z = arm.position.z, len = Math.hypot(back.x - pin.x, back.y - pin.y);
+      arm.position.set((pin.x + back.x) / 2, (pin.y + back.y) / 2, z); arm.scale.y = len;
+      arm.rotation.z = Math.atan2(back.y - pin.y, back.x - pin.x) - Math.PI / 2;
+    });
+    const hx = 0.033, hy = p.PIV + 0.033 * Math.sin(th) - 0.004, wy = 0.012;            // horse head down to the wellhead
+    p.rod.position.set(hx, (hy + wy) / 2, 0); p.rod.scale.y = Math.max(0.001, hy - wy);
+    if (now > p.next) { p.next = now + 3500 + Math.random() * 5500; gush(p, 1); }       // every few seconds: a spit of goo
+  });
+  // the goo: heavy, sticky, spreads into shiny puddles
+  const steps = Math.ceil(dt0 / 0.01), dt = dt0 / steps;
+  O.blobs.forEach((b, bi) => {
+    if (b.rest && Math.hypot(phys.acc.x, phys.acc.z) > 1.6) b.rest = false;
+    if (!b.rest) for (let s = 0; s < steps; s++) {
+      b.v.y += BALL_G * 1.1 * dt;
+      b.v.x -= phys.acc.x * dt * 0.35; b.v.z -= phys.acc.z * dt * 0.35;
+      b.p.addScaledVector(b.v, dt);
+      const ground = FLOOR_Y + b.r * (1 - b.flat * 0.7) * 0.4 + (bi % 6) * 0.00008;
+      if (b.p.y < ground) {
+        b.p.y = ground;
+        if (b.v.y < 0) b.v.y = -b.v.y * 0.05;                                            // splat: almost no bounce
+        const f = Math.max(0, 1 - dt * 7); b.v.x *= f; b.v.z *= f;
+        if (Math.abs(b.v.y) < 0.03) b.v.y = 0;
+        if (b.v.lengthSq() < 0.00004) { b.v.set(0, 0, 0); b.rest = b.flat > 0.98; }
+      }
+      if (Math.abs(b.p.x) > COURT_XB - b.r) { b.p.x = Math.sign(b.p.x) * (COURT_XB - b.r); b.v.x = -b.v.x * 0.1; }
+      if (Math.abs(b.p.z) > COURT_ZB - b.r) { b.p.z = Math.sign(b.p.z) * (COURT_ZB - b.r); b.v.z = -b.v.z * 0.1; }
+    }
+    if (b.p.y <= FLOOR_Y + b.r * 0.6) b.flat = Math.min(1, b.flat + dt0 * 2.5);          // on the ground it spreads out flat
+    const sp = Math.hypot(b.v.x, b.v.z), air = b.flat < 0.05;
+    const stretch = air ? 1 + Math.min(0.8, Math.abs(b.v.y) * 0.6) : 1;                  // falling drops stretch a little
+    oS.set(b.r * (1 + b.flat * 0.9) / Math.sqrt(stretch), b.r * (1 - b.flat * 0.72) * stretch, b.r * (1 + b.flat * 0.9) / Math.sqrt(stretch));
+    O.inst.setMatrixAt(bi, oM.compose(b.p, oQ.identity(), oS));
+  });
+  O.inst.count = O.blobs.length; O.inst.instanceMatrix.needsUpdate = true;
+}
+// fingers push the goo around; touching a wellhead makes it gush
+function oilTouch(i, joints) {
+  const O = OIL;
+  if (!O.on || !joints || !inMarket()) return;
+  const mkt = O.el.object3D, now = performance.now();
+  const mem = O.hands[i] || (O.hands[i] = { prev: {}, t: now, cool: 0 });
+  const dt = (now - mem.t) / 1000;
+  for (const k of GRAB_PTS) {
+    const lp = mkt.worldToLocal(ov1.copy(joints[k])), prev = mem.prev[k] || (mem.prev[k] = lp.clone());
+    const vx = dt > 0 && dt < 0.1 ? (lp.x - prev.x) / dt : 0, vz = dt > 0 && dt < 0.1 ? (lp.z - prev.z) / dt : 0;
+    for (const b of O.blobs) {
+      const dx = b.p.x - lp.x, dy = b.p.y - lp.y, dz = b.p.z - lp.z;
+      if (dx * dx + dy * dy + dz * dz > Math.pow(b.r * 1.6 + 0.01, 2)) continue;
+      b.v.x = vx * 0.5 + dx * 8; b.v.z = vz * 0.5 + dz * 8; b.rest = false;               // sticky: it smears along with the finger
+    }
+    if (now > mem.cool) for (const p of O.pumps) {
+      const w = p.grp.localToWorld(ov2.copy(p.wellTop)); mkt.worldToLocal(w);
+      if (w.distanceTo(lp) < 0.014) { gush(p, 1.3); mem.cool = now + 900; p.next = now + 4000; break; }
+    }
+    prev.copy(lp);
+  }
+  mem.t = now;
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); vaultTouch(i, j); mineTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
+  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); vaultTouch(i, j); mineTouch(i, j); oilTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => {
     [["follow", stepFollow], ["physics", stepPhysics], ["grab", stepGrab], ["anims", stepAnims], ["piles", (n) => PILES.forEach((p) => p.update(n))],
-     ["pulse", stepPulse], ["grok", stepOrb], ["hands", stepHands], ["ball", stepBall], ["vault", stepVault], ["mine", stepMine]].forEach(([tag, f]) => { try { f(now); } catch (e) { reportErr(tag, e); } });
+     ["pulse", stepPulse], ["grok", stepOrb], ["hands", stepHands], ["ball", stepBall], ["vault", stepVault], ["mine", stepMine], ["oil", stepOil]].forEach(([tag, f]) => { try { f(now); } catch (e) { reportErr(tag, e); } });
   },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
