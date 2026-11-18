@@ -236,6 +236,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 
 - Nov 17: Brian: "a hell of a lot better", but he could not interrupt Grok while Grok counted down from 20. Cause: the barge-in bar (floor*2 + 0.041 + 0.9 x output level) assumed far more echo than reaches the mic. Now `AI.echoK` learns the mic/output ratio while the user is quiet, and barge-in needs mic > floor*2 + 0.018 + 2.2 x echoK x output for 350 ms; fresh clips during his speech are only started when no one is mid-word. UNTESTED.
 
+- Nov 17: Brian found the latest version slow and said he would rather lose interrupting unless it can be as fast. Likely causes: noise heard while thinking counted as a newer question and discarded the answer in progress; end-of-speech had been raised to 800 ms; a longer keyterm list. Changes: `vadTick` ignores the mic while thinking (and while speaking if `SETTINGS.grokInterrupt` is false); end of speech 650 ms; keyterms capped at 40; history sent capped at 8 messages. UNTESTED.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).

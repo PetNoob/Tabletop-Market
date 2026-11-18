@@ -109,7 +109,8 @@ const SETTINGS = {
   liveBudget: 10,       // live mode only: shown until the real Gemini balance arrives (and used if the server cannot fetch it)
   oddsAnim: true,       // numbers slide up or down and flash green or red when the odds change
   assistant: true,
-  grokDebug: true,      // testing aid: a small note under Grok shows what he heard and any problem. Set false for the demo     // the talking orb (needs serverUrl, with Grok and ElevenLabs keys on the server)
+  grokDebug: true,
+  grokInterrupt: true,  // true = you can cut Grok off while he talks; false = he finishes first (the older behaviour)      // testing aid: a small note under Grok shows what he heard and any problem. Set false for the demo     // the talking orb (needs serverUrl, with Grok and ElevenLabs keys on the server)
   icons: true,          // show Gemini's market pictures (needs serverUrl, which passes them through)
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
   // used for the tabs only if Gemini's own list of categories cannot be downloaded
@@ -2619,6 +2620,10 @@ function vadTick() {
   // just after he finishes talking, his voice is still echoing: ignore it, then start a clean clip
   if (now < (AI.deafUntil || 0)) return;
   if (AI.freshClip) { AI.freshClip = false; return recCut(false); }
+  if (AI.mode === "thinking" || (AI.mode === "speaking" && !S.grokInterrupt)) {   // working on an answer: noise must not restart him
+    if (age > 1500 && AI.speechMs === 0) recCut(false);
+    return;
+  }
   const talking = AI.mode === "speaking";
   const lvl = analyserLevel(AI.micAn);
   AI.micLvl = lvl;
@@ -2638,7 +2643,7 @@ function vadTick() {
     if (AI.speech) { aiHush(); aiMode("awake"); }                       // you cut in: he stops and listens
     else { if (age > 1500 && AI.speechMs === 0) recCut(false); return; }   // only start a fresh clip when nobody is mid-word
   }
-  if (AI.speech && (AI.quietMs > 800 || age > 12000)) {                // a sentence just ended (or a long one): check it
+  if (AI.speech && (AI.quietMs > 650 || age > 12000)) {                // a sentence just ended (or a long one): check it
     AI.t0 = now;                                                          // for the timing note
     if (AI.mode === "awake") { aiMode("thinking"); AI.req = (AI.req || 0) + 1; }   // show right away that he caught it
     return recCut(true);
@@ -2733,7 +2738,7 @@ function aiTerms() {
   const add = (s) => { s = String(s || "").replace(/[<>{}\[\]\\|]/g, "").trim(); if (s && s.length <= 50 && s.split(/\s+/).length <= 5) words.push(s); };
   if (inMarket()) { add(state.market.title.split(":")[0]); state.market.opts.slice(0, 20).forEach((o) => add(o.name)); }
   else visibleMarkets().forEach((m) => { add(m.title.split(":")[0]); m.opts.slice(0, 2).forEach((o) => add(o.name)); });
-  return Array.from(new Set(words)).slice(0, 80);
+  return Array.from(new Set(words)).slice(0, 40);
 }
 function aiGreet() {
   AI.hopT = performance.now();
@@ -2746,7 +2751,7 @@ async function aiAnswer(q) {
   aiMode("thinking");
   try {
     if (S.grokDebug) aiNote("Asking Grok: " + q);
-    const a = await aiPost("/ask", { question: q, context: aiContext(), history: AI.history || [] }, true);
+    const a = await aiPost("/ask", { question: q, context: aiContext(), history: (AI.history || []).slice(-8) }, true);
     AI.t2 = performance.now();
     if (id !== AI.req) { if (S.grokDebug) aiNote("Skipped (a newer question came in)"); return; }
     if (S.grokDebug) aiNote("Grok: " + (a.say || "(no words)") + (a.action ? "  [" + a.action.type + "]" : ""));
