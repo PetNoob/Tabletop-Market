@@ -23,8 +23,8 @@
                            margin-left: -1px; background: #ff8c32; }
   #welcome .mark::after { content: ""; position: absolute; left: 50%; top: 50%; width: 22px; height: 22px;
                           margin: -13px 0 0 -13px; border: 2px solid #ff8c32; border-radius: 50%; }
-  #welcome .mark i { position: absolute; right: 14px; bottom: 100%; width: 26px; height: 14px; background: #2fbf71;
-                     border-radius: 2px; box-shadow: 0 -6px 0 -1px #25a05d, 0 -12px 0 -2px #3bd184; margin-bottom: -40px; }
+  #welcome .mark i { position: absolute; right: 14px; bottom: 100%; width: 26px; height: 14px; background: #ff8c32;
+                     border-radius: 2px; box-shadow: 0 -6px 0 -1px #e0741f, 0 -12px 0 -2px #ffa04f; margin-bottom: -40px; }
   #welcome h1 { font-size: 34px; font-weight: 650; letter-spacing: -0.02em; margin: 0 0 8px; }
   #welcome .pitch { font-size: 16px; color: #aab1bb; margin: 0 0 30px; line-height: 1.45; }
   #welcome button { font: inherit; cursor: pointer; border-radius: 12px; display: block; width: 100%; }
@@ -170,7 +170,7 @@ AFRAME.registerComponent("xr-input", {
     // hand outlines: a dot on every joint and a line along every finger
     const dotGeo = new THREE.SphereGeometry(0.0055, 10, 8);
     const dotMat = new THREE.MeshBasicMaterial({ color: 0xf2f4f7 });
-    const tipMat = new THREE.MeshBasicMaterial({ color: 0x2fbf71 });
+    const tipMat = new THREE.MeshBasicMaterial({ color: 0xff8c32 });
     this.hands = [0, 1].map(() => {
       const group = new THREE.Group(); group.visible = false; root.add(group);
       const dots = [];
@@ -330,7 +330,8 @@ AFRAME.registerComponent("xr-input", {
    ====================================================================== */
 const S = SETTINGS, THREE = AFRAME.THREE;
 const C = { base: "#15171a", court: "#202328", panel: "#1b1e22", key: "#2b2f36", keyOn: "#434a54", line: "#4d535d",
-            text: "#f2f4f7", dim: "#b0b8c3", green: "#2fbf71", greenInk: "#06210f", red: "#e5484d", handle: "#5d646e", walletOn: "#1f5a3c" };
+            text: "#f2f4f7", dim: "#b0b8c3", green: "#2fbf71", greenInk: "#06210f", red: "#e5484d", handle: "#5d646e", walletOn: "#5a3315",
+            acc: "#ff8c32", accInk: "#1f0e00" };
 const state = {
   balance: S.startBalance, sel: null, amount: 5, typed: "",
   view: "lobby", scroll: 0, lockUntil: 0, feat: {}, sort: "default", searchQ: "", barStart: 0,
@@ -964,12 +965,12 @@ function build() {
   mk("a-ring", { position: "0 0.0052 0", rotation: "-90 0 0", "radius-inner": 0.037, "radius-outer": 0.040, color: C.line }, UI.courtLines);
 
   // balance card (always there)
-  const bal = mk("a-entity", { position: "-0.45 0.045 0.20", rotation: "-35 18 0" }, market);
+  const bal = mk("a-entity", { position: "-0.54 0.05 0.21", rotation: "-35 26 0" }, market);
   UI.walletAt = bal;
   UI.wallet = slab(bal, 0.20, 0.09, 0.008, C.panel, { r: 0.018, opacity: SEE });
   UI.balTitle = label(bal, "Test balance", 0, 0.029, 0.006, 0.0062, C.dim);
   UI.balance = label(bal, "", 0, 0.003, 0.006, 0.017, C.text);
-  UI.interest = label(bal, `Earning ${S.interestRate}% while idle (preview)`, 0, -0.027, 0.006, 0.0052, C.green);
+  UI.interest = label(bal, `Earning ${S.interestRate}% while idle (preview)`, 0, -0.027, 0.006, 0.0052, C.acc);
   UI.arcLine = label(bal, "", 0, -0.058, 0.006, 0.0048, C.dim);
 
   // handle to move everything (always there)
@@ -1169,7 +1170,7 @@ function buildFeatured(parent) {
   F.opts = [0, 1].map((k) => button(el, "", -0.252 + k * 0.158, -0.012, 0.148, 0.05, () => featPick(k),
     { size: 0.0084, r: 0.014, color: k ? ACC2 : ACC, ink: "#0b0d10", opacity: 1,
       enabled: () => inLobby() && !state.activity && F.on && F.inside && !!(F.m && F.m.opts[k]) }));
-  F.mine = label(el, "", -0.33, -0.056, z, 0.0064, C.green, "left");
+  F.mine = label(el, "", -0.33, -0.056, z, 0.0064, C.acc, "left");
   F.foot = label(el, "", -0.33, -0.084, z, 0.0054, C.dim, "left");
   // right: score (or a short summary) and the price history of both answers
   F.clock = label(el, "", 0.165, 0.086, z, 0.0062, C.dim);
@@ -1187,7 +1188,7 @@ function featPick(k) {
 
 // the category bar: its own strip just under the panel, scrolls sideways with its arrows
 function buildBar(L) {
-  const bar = UI.bar = mk("a-entity", { position: "0 -0.272 0.004" }, L);
+  const bar = UI.bar = mk("a-entity", { position: "0 -0.265 0.004" }, L);
   slab(bar, LW, 0.042, 0.01, "#0c0e11", { r: 0.021, opacity: 1 });
   rim(bar, LW, 0.042, 0.021);
   UI.barL = button(bar, "<", -0.347, 0, 0.03, 0.03, () => barShift(-1), { size: 0.008, r: 0.015, color: FIELD, enabled: () => inLobby() && !!UI.barMoreL });
@@ -1615,7 +1616,7 @@ function buildMarket(market) {
     row.chip = slab(b.el, 0.005, 0.03, 0.002, C.line, { r: 0.0025, order: 2, pos: `-0.134 0 ${b.tz}` });
     row.icon = iconMesh(b.el, 0.026, -0.112, 0, b.tz);
     row.name = label(b.el, "", -0.124, 0.006, b.tz, 0.0074, C.text, "left");
-    row.mine = label(b.el, "", -0.124, -0.013, b.tz, 0.005, C.green, "left");
+    row.mine = label(b.el, "", -0.124, -0.013, b.tz, 0.005, C.acc, "left");
     row.pct = tickerLabel(b.el, 0.134, 0, b.tz, 0.012, C.text, "right");
     ROWS.push(row);
   }
@@ -1674,7 +1675,7 @@ function buildMarket(market) {
   const on = { enabled: () => state.sel !== null };
   UI.pTitle = label(p, "", -0.09, 0.09, 0.006, 0.0095, C.dim);
   UI.pAmount = label(p, "", -0.09, 0.052, 0.006, 0.024, C.text);
-  UI.pWin = label(p, "", -0.09, 0.02, 0.006, 0.0078, C.green);
+  UI.pWin = label(p, "", -0.09, 0.02, 0.006, 0.0078, C.acc);
   // slider
   UI.track = slab(p, 0.29, 0.02, 0.008, C.key, { r: 0.01, order: 1, pos: "-0.09 -0.012 0.007", cls: "clickable" });
   UI.track.tmEnabled = on.enabled;
@@ -1688,7 +1689,7 @@ function buildMarket(market) {
     button(p, q[0], -0.199 + i * 0.073, -0.052, 0.066, 0.034, () => setAmount(state.amount + q[1]), on));
   button(p, "Clear", 0.02, -0.052, 0.066, 0.034, () => setAmount(0), on);
   button(p, "Cancel", -0.185, -0.094, 0.094, 0.036, closePanel, { enabled: on.enabled, r: 0.018 });
-  button(p, "Confirm", -0.045, -0.094, 0.17, 0.036, confirmPick, { enabled: on.enabled, r: 0.018, color: C.green, ink: C.greenInk, size: 0.0095 });
+  button(p, "Confirm", -0.045, -0.094, 0.17, 0.036, confirmPick, { enabled: on.enabled, r: 0.018, color: C.acc, ink: C.accInk, size: 0.0095 });
   [["1", "2", "3"], ["4", "5", "6"], ["7", "8", "9"], [".", "0", "<"]].forEach((row, r) =>
     row.forEach((k, c) => button(p, k, 0.118 + c * 0.047, 0.07 - r * 0.042, 0.043, 0.038, () => typeKey(k), on)));
 }
@@ -1746,7 +1747,7 @@ function openMarket(m) {
 }
 // the card you pressed lifts off and grows into the board; then it fades and the market is underneath
 const COURT_SCALE = 0.85;   // size of the table and court (1 = original)
-const STAGE_LOBBY = { y: 0.30, z: 0.08, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
+const STAGE_LOBBY = { y: 0.29, z: 0.15, rx: -24 }, STAGE_BOARD = { y: 0.25, z: -0.255, rx: -18 };
 function setStage(k) {
   state.stage = k;
   const mix = (a, b) => a + (b - a) * k, o = UI.lobby.object3D;
@@ -2224,7 +2225,7 @@ function refreshLobby() {
   UI.lStatus.setAttribute("value", act ? (LIVE.on ? "Your Gemini account" : "Test money") :
                                    st.loading ? "Loading..." : st.source === "live" ? "Live from Gemini" :
                                    st.source === "saved" ? "Gemini down: saved " + shortTime(st.savedAt) : "Gemini down: samples, retrying");
-  UI.lStatus.setAttribute("color", act ? (LIVE.on ? C.green : C.dim) : st.loading ? C.dim : st.source === "live" ? C.green : C.red);
+  UI.lStatus.setAttribute("color", act ? (LIVE.on ? C.acc : C.dim) : st.loading ? C.dim : st.source === "live" ? C.acc : C.red);
   // lay out the rows that fit, from the current scroll position
   const F = UI.feat;
   F.on = false; CARDS.forEach((c) => { c.on = false; });
@@ -2272,7 +2273,7 @@ function fillFeatured(m) {
   });
   const mine = stakedOn(m);
   F.mine.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : m.kind === "list" && m.opts.length > 2 ? "+" + (m.opts.length - 2) + " more answers inside" : "");
-  F.mine.setAttribute("color", mine > 0 ? C.green : C.dim);
+  F.mine.setAttribute("color", mine > 0 ? C.acc : C.dim);
   F.foot.setAttribute("value", featFoot(m));
   // right side: the score when ESPN has this game, otherwise a plain summary (never a made-up score)
   if (sc && sc.state !== "pre") {
@@ -2330,7 +2331,7 @@ function fillCard(card, m) {
     centerTicker(row.pct, 0.077, t);
   });
   card.foot.setAttribute("value", mine > 0 ? "Your pick " + money(mine) : !duel && m.opts.length > 2 ? "+" + (m.opts.length - 2) + " more" : "");
-  card.foot.setAttribute("color", mine > 0 ? C.green : C.dim);
+  card.foot.setAttribute("color", mine > 0 ? C.acc : C.dim);
   card.vol.setAttribute("value", volText(m.volume));
 }
 // a card in the Activity view: a position, an order, or an Arc receipt
@@ -2377,7 +2378,7 @@ function refreshMarket() {
   }
   UI.status.setAttribute("value", state.sim ? "Simulated odds (demo, not real)" : LIVE.on ? "LIVE: real orders on Gemini" :
                                   live ? "Live odds from Gemini" : m.saved ? "Saved odds (Gemini down), prices still update" : "Sample odds");
-  UI.status.setAttribute("color", !state.sim && live ? C.green : C.dim);
+  UI.status.setAttribute("color", !state.sim && live ? C.acc : C.dim);
   UI.simBtn.t.setAttribute("value", LIVE.on ? "Live: no simulation" : state.sim ? "Stop simulation" : "Simulate odds");
   // footer
   const d = m.sport && m.start ? m.start : m.closes;
@@ -2415,7 +2416,7 @@ function refreshMarket() {
   if (!state.sim) gs.forEach((o) => loadRange(o, range));
   const ptsList = gs.map((o) => rangePts(m, o));
   const waiting = ptsList.some((p, k) => p === null && gs[k].sym);
-  chart.set(gs.map((o, k) => ({ color: duel ? o.color : C.green, pts: ptsList[k] || [],
+  chart.set(gs.map((o, k) => ({ color: duel ? o.color : C.acc, pts: ptsList[k] || [],
                                 name: duel ? trunc(o.abbr || o.name, 7) : "Yes", value: pct(o.price) })),
             m.sample ? "No history for sample markets" : waiting ? "Loading history..." : state.sim ? "Simulated movement (not real)" :
             duel ? "" : trunc(gs[0].name, 34), range === "all");
@@ -2507,7 +2508,7 @@ function settleCash(i, frac, proceeds, ref) {
   if (frac > 0.995) delete state.picks[p.key];
   else { p.pos.shares *= 1 - frac; p.pos.stake *= 1 - frac; }                 // the rest of the pick stays on the table
   pile.release(UI.walletAt.object3D.getWorldPosition(gv));
-  UI.balance.setAttribute("color", C.green);
+  UI.balance.setAttribute("color", C.acc);
   setTimeout(() => UI.balance.setAttribute("color", C.text), 900);
 }
 function endGrab() { grab.i = -1; grab.pending = false; UI.wallet.setColor(C.panel); lockFingers(); refresh(); }
@@ -2655,7 +2656,7 @@ function activityItems() {
                  foot: ({ done: "Confirmed on Arc", waiting: "Confirming...", sending: "Sending...", failed: "Failed", skipped: "Skipped",
                           quoting: "Getting fee...", approving: "Approving...", burning: "Sending...", confirming: "Circle confirming...",
                           arrived: "Arrived on Base", slow: "Still with Circle" }[r.status] || r.status) +
-                       (r.t ? "  " + shortTime(r.t) : ""), color: r.kind === "lock" ? C.green : C.dim });
+                       (r.t ? "  " + shortTime(r.t) : ""), color: r.kind === "lock" ? C.acc : C.dim });
     });
   }
   return out;
@@ -2725,7 +2726,7 @@ window.TM = {
   grabEnd: () => { if (grab.i >= 0) grabDone(!grab.over); },
   grabCancel: () => { if (grab.i >= 0) grabDone(false); },
   pileClicked,
-  setHandle: (onNow) => UI.handle && UI.handle.setColor(onNow ? C.green : C.handle),
+  setHandle: (onNow) => UI.handle && UI.handle.setColor(onNow ? C.acc : C.handle),
   // called every frame with the position of an index fingertip
   fingerAt: function (hand, tip) {
     const now = performance.now(), locked = now < state.lockUntil;
@@ -3595,7 +3596,8 @@ function stepOrb(now) {
   const t = now / 1000, o = UI.orbAt.object3D, dt = Math.min(0.05, Math.max(0.001, (now - (AI.last || now)) / 1000));
   AI.last = now;
   // where he wants to be: just right of the table, a little above it
-  const target = document.getElementById("market").object3D.localToWorld(gv3.set(0.42, 0.13, 0.04));
+  const sk = clamp(state.stage || 0, 0, 1);
+  const target = document.getElementById("market").object3D.localToWorld(gv3.set(0.51 - 0.09 * sk, 0.34 - 0.21 * sk, 0.16 - 0.12 * sk));
   if (!AI.placed) { AI.pos.copy(target); AI.placed = true; }
   // a soft spring: he lags behind, then hurries to catch up
   gv4.copy(target).sub(AI.pos).multiplyScalar(34).addScaledVector(AI.vel, -7.5);
