@@ -1020,6 +1020,7 @@ function build() {
   buildLobby(market);
   buildMarket(market);
   buildAddMoney(market);
+  buildSports(market);
   UI.courtLines.object3D.scale.set(COURT_SCALE, 1, COURT_SCALE);
   UI.hoops.object3D.scale.setScalar(COURT_SCALE);
   // a plain panel used only during the move between the list and a market: it grows from the card you pressed
@@ -1778,7 +1779,7 @@ function openMarket(m) {
   state.lockUntil = performance.now() + 1900;           // no presses while the market is still arriving
   UI.arriving = true; setTimeout(() => { UI.arriving = false; }, 1900);
   UI.graph.reveal();
-  growIntoBoard(UI.fromCard, () => { if (inMarket() && state.market === m) courtShow(!!m.hoops); });   // the court is only for basketball
+  growIntoBoard(UI.fromCard, () => { if (inMarket() && state.market === m) courtShow(sportKind(m)); });   // a floor and a ball for each sport
   UI.fromCard = null;
   last.game = Date.now(); pollOptions(viewOptions(), m);
 }
@@ -1845,29 +1846,32 @@ function shrinkIntoCard(ticker) {
   });
 }
 // the court draws itself out from the center circle and the hoops rise; going away, it all pulls back in
-function courtShow(on) {
-  if (!!state.courtOn === on) return;
-  state.courtOn = on;
-  const lines = Array.from(UI.courtLines.children).map((e) => e.object3D);   // center line, two end lines, two sidelines, circle
+// the floor draws out from the center line (and the hoops rise, for basketball); going away it all pulls back in
+function courtShow(kind) {
+  kind = kind || "";
+  const was = state.courtOn || "";
+  if (was === kind) return;
+  state.courtOn = kind;
   const hoops = Array.from(UI.hoops.children).map((e) => e.object3D);
   const rims = [UI.rim0, UI.rim1].map((r) => r && r.getObject3D("mesh")).filter(Boolean);
-  const tiny = 0.0001;
-  const draw = (center, sides, ends, hoop, glow) => {
-    if (lines[0]) lines[0].scale.set(1, 1, Math.max(tiny, center));
-    [lines[1], lines[2]].forEach((l) => l && l.scale.set(1, 1, Math.max(tiny, ends)));
-    [lines[3], lines[4]].forEach((l) => l && l.scale.set(Math.max(tiny, sides), 1, 1));
-    if (lines[5]) lines[5].scale.setScalar(Math.max(tiny, center));
-    hoops.forEach((h) => h.scale.set(1, Math.max(tiny, hoop), 1));
+  const setHoops = (k, glow) => {
+    hoops.forEach((h) => h.scale.set(1, Math.max(0.0001, k), 1));
     rims.forEach((r) => { if (r.material && r.material.emissive) { r.material.emissive.copy(r.material.color); r.material.emissiveIntensity = glow; } });
   };
-  if (on) {
-    UI.courtLines.setAttribute("visible", true); UI.hoops.setAttribute("visible", true);
-    tween("court", 900, (k) => draw(easeOut(span(k, 0.15, 0.55)), easeOut(span(k, 0.3, 0.7)), easeOut(span(k, 0.5, 0.85)),
-                                   easeBack(span(k, 0.45, 1)), 1.2 * Math.sin(Math.PI * span(k, 0.7, 1))));
-  } else {
-    tween("court", 380, (k) => { const a = 1 - easeOut(k); draw(a, a, a, a, 0); },
-          () => { UI.courtLines.setAttribute("visible", false); UI.hoops.setAttribute("visible", false); });
+  if (!kind) {
+    ballShow("");
+    tween("court", 380, (k) => { const a = 1 - easeOut(k); FLOOR.u.value = a; if (was === "basketball") setHoops(a, 0); },
+          () => { FLOOR.mesh.visible = false; UI.hoops.setAttribute("visible", false); });
+    return;
   }
+  FLOOR.mat.map = floorTex(kind);
+  FLOOR.u.value = 0; FLOOR.mesh.visible = true;
+  UI.hoops.setAttribute("visible", kind === "basketball");
+  if (kind === "basketball") setHoops(0.0001, 0);
+  tween("court", 900, (k) => {
+    FLOOR.u.value = easeOut(span(k, 0.05, 0.65));
+    if (kind === "basketball") setHoops(easeBack(span(k, 0.45, 1)), 1.2 * Math.sin(Math.PI * span(k, 0.7, 1)));
+  }, () => ballShow(kind));
 }
 function backToLobby() {
   grabReset();
@@ -1875,7 +1879,7 @@ function backToLobby() {
   state.sel = null; UI.panel.setAttribute("visible", false);
   const was = state.market && state.market.ticker;
   state.view = "lobby";
-  courtShow(false);
+  courtShow("");
   lockFingers(); refresh();
   shrinkIntoCard(was);
   last.cards = Date.now(); pollOptions(cardOptions());
@@ -2055,7 +2059,7 @@ function toMarket(e) {
            court: isGame, hoops: isGame && /basketball/i.test(sub),
            sport: e.category === "Sports", live: !!e.isLive, start: date(e.startTime), closes: date(e.expiryDate),
            volume: parseFloat(e.volume) || 0, tags: (e.tags || []).join(" "),
-           smType: (e.sportsMarket && e.sportsMarket.type) || "" };
+           smType: (e.sportsMarket && e.sportsMarket.type) || "", sk: String((e.sportsMarket && e.sportsMarket.sport) || "").toLowerCase() };
 }
 function sampleMarkets() {
   return S.sampleGames.map((g, i) => ({ ticker: "SAMPLE-" + i, title: g.title, category: "Sample", sub: "Pro Basketball",
@@ -2962,13 +2966,364 @@ function refreshAdd() {
   UI.addFoot.setAttribute("value", "Test mode: no real money moves");
 }
 
+/* ---------- sport floors and a ball you can knock around ----------
+   Each sport gets its own playing surface, painted in code (no downloaded images): hardwood for basketball,
+   striped grass for soccer, ice for hockey, turf for football, a diamond for baseball. It draws out from the
+   center line when a market opens. A ball for that sport sits on it: hit it with your fingers or palm and it
+   flies off with your hand's speed, bounces on the floor and off invisible walls at the court's edge, and
+   sloshes when the table is moved. A controller or mouse click kicks it. */
+const FLOOR = { mesh: null, mat: null, u: { value: 0 }, tex: {} };
+const BALL = { on: false, el: null, kind: "", models: {}, p: new THREE.Vector3(), v: new THREE.Vector3(), r: 0.016, h: 0, e: 0.7,
+               puck: false, wy: 0, last: 0, hands: [] };
+const FLOOR_Y = 0.0045, COURT_XB = 0.31 * COURT_SCALE - 0.006, COURT_ZB = 0.17 * COURT_SCALE - 0.006, BALL_G = -5;
+const SPORTS = ["basketball", "soccer", "hockey", "football", "baseball"];
+function sportKind(m) {
+  if (!m || !m.sport) return "";
+  if (SPORTS.includes(m.sk)) return m.sk;
+  const s = ((m.sk || "") + " " + (m.sub || "") + " " + (m.tags || "")).toLowerCase();
+  if (/basketball|nba|ncaab|wnba/.test(s)) return "basketball";
+  if (/hockey|nhl/.test(s)) return "hockey";
+  if (/baseball|mlb/.test(s)) return "baseball";
+  if (/soccer|premier|liga|mls|serie a|bundesliga|ligue|champions|uefa|fifa|eredivisie/.test(s)) return "soccer";
+  if (/football|nfl|ncaaf/.test(s)) return "football";
+  return "";
+}
+// a flat rounded rectangle whose picture coordinates run 0..1 across it
+function roundedRectGeo(w, h, r) {
+  const sh = new THREE.Shape(), x = w / 2, y = h / 2;
+  sh.moveTo(-x + r, -y); sh.lineTo(x - r, -y); sh.quadraticCurveTo(x, -y, x, -y + r);
+  sh.lineTo(x, y - r); sh.quadraticCurveTo(x, y, x - r, y);
+  sh.lineTo(-x + r, y); sh.quadraticCurveTo(-x, y, -x, y - r);
+  sh.lineTo(-x, -y + r); sh.quadraticCurveTo(-x, -y, -x + r, -y);
+  const g = new THREE.ShapeGeometry(sh, 8), p = g.attributes.position, uv = g.attributes.uv;
+  for (let i = 0; i < p.count; i++) uv.setXY(i, (p.getX(i) + x) / w, (p.getY(i) + y) / h);
+  uv.needsUpdate = true;
+  return g;
+}
+// a repeatable random generator, so a floor looks the same every time
+function seeded(seed) { let s = seed >>> 0; return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+/* ---------- painting the floors (canvas, 1024 wide, same shape as the table: 0.62 x 0.34) ---------- */
+const FW = 1024, FH = Math.round(1024 * 0.34 / 0.62);
+function floorTex(kind) {
+  if (FLOOR.tex[kind]) return FLOOR.tex[kind];
+  const cv = document.createElement("canvas"); cv.width = FW; cv.height = FH;
+  const g = cv.getContext("2d"), rnd = seeded(kind.length * 977 + 13);
+  ({ basketball: paintHardwood, soccer: paintPitch, hockey: paintRink, football: paintGridiron, baseball: paintDiamond }[kind] || paintHardwood)(g, rnd);
+  const tx = new THREE.CanvasTexture(cv);
+  tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8;
+  return (FLOOR.tex[kind] = tx);
+}
+const line = (g, w, c) => { g.lineWidth = w; g.strokeStyle = c || "rgba(255,255,255,0.93)"; };
+// both halves of a court are mirror images: draw one half, flip, draw again
+function mirrored(g, draw) { draw(); g.save(); g.translate(FW, 0); g.scale(-1, 1); draw(); g.restore(); }
+function sheen(g, a) {
+  const sh = g.createRadialGradient(FW * 0.45, FH * 0.4, 20, FW / 2, FH / 2, FW * 0.62);
+  sh.addColorStop(0, `rgba(255,248,230,${a})`); sh.addColorStop(1, "rgba(0,0,0,0.16)");
+  g.fillStyle = sh; g.fillRect(0, 0, FW, FH);
+}
+function paintHardwood(g, rnd) {
+  // maple planks running the length of the court, each a slightly different tone, with grain and end joints
+  const ph = FH / 24;
+  for (let r = 0; r * ph < FH; r++) {
+    let x = -rnd() * 300;
+    while (x < FW) {
+      const len = 170 + rnd() * 260, y0 = r * ph;
+      g.fillStyle = `hsl(${30 + rnd() * 5}, ${50 + rnd() * 12}%, ${55 + rnd() * 9}%)`; g.fillRect(x, y0, len, ph);
+      g.globalAlpha = 0.16; g.strokeStyle = "#6b4423"; g.lineWidth = 1;
+      for (let k = 0; k < 6; k++) {
+        const yy = y0 + rnd() * ph; g.beginPath(); g.moveTo(x, yy);
+        g.bezierCurveTo(x + len * 0.3, yy + (rnd() - 0.5) * 4, x + len * 0.7, yy + (rnd() - 0.5) * 4, x + len, yy + (rnd() - 0.5) * 3); g.stroke();
+      }
+      g.globalAlpha = 0.4; g.fillStyle = "#5a3a1e"; g.fillRect(x + len - 1, y0, 1.5, ph); g.globalAlpha = 1;
+      x += len;
+    }
+    g.globalAlpha = 0.28; g.fillStyle = "#4a2f18"; g.fillRect(0, r * ph, FW, 1); g.globalAlpha = 1;
+  }
+  sheen(g, 0.22);
+  // markings, NBA proportions (28.65 m x 15.24 m)
+  const m = 26, sx = (FW - 2 * m) / 28.65, sy = (FH - 2 * m) / 15.24, cy = FH / 2, X = (v) => m + v * sx, Y = (v) => cy + v * sy;
+  g.fillStyle = "rgba(140,36,28,0.58)";                                             // painted key and center circle
+  g.beginPath(); g.ellipse(FW / 2, cy, 1.8 * sx, 1.8 * sy, 0, 0, Math.PI * 2); g.fill();
+  mirrored(g, () => { g.fillStyle = "rgba(140,36,28,0.58)"; g.fillRect(X(0), Y(-2.45), 5.8 * sx, 4.9 * sy); });
+  line(g, 4);
+  g.strokeRect(m, m, FW - 2 * m, FH - 2 * m);
+  g.beginPath(); g.moveTo(FW / 2, m); g.lineTo(FW / 2, FH - m); g.stroke();
+  g.beginPath(); g.ellipse(FW / 2, cy, 1.8 * sx, 1.8 * sy, 0, 0, Math.PI * 2); g.stroke();
+  mirrored(g, () => {
+    line(g, 4);
+    g.strokeRect(X(0), Y(-2.45), 5.8 * sx, 4.9 * sy);                                // the key
+    g.beginPath(); g.ellipse(X(5.8), cy, 1.8 * sx, 1.8 * sy, 0, 0, Math.PI * 2); g.stroke();   // free-throw circle
+    const a = Math.asin(6.6 / 7.24);                                                 // three-point line: straight corners, then the arc
+    g.beginPath(); g.moveTo(X(0), Y(-6.6)); g.lineTo(X(1.575 + 7.24 * Math.cos(a)), Y(-6.6));
+    g.ellipse(X(1.575), cy, 7.24 * sx, 7.24 * sy, 0, -a, a); g.lineTo(X(0), Y(6.6)); g.stroke();
+    g.beginPath(); g.ellipse(X(1.575), cy, 1.25 * sx, 1.25 * sy, 0, -Math.PI / 2, Math.PI / 2); g.stroke();   // restricted area
+    line(g, 5, "rgba(30,30,30,0.6)"); g.beginPath(); g.moveTo(X(1.2), Y(-0.9)); g.lineTo(X(1.2), Y(0.9)); g.stroke();   // backboard shadow
+  });
+}
+function paintPitch(g, rnd) {
+  const n = 14, bw = FW / n;
+  for (let i = 0; i < n; i++) { g.fillStyle = i % 2 ? "#3f8f43" : "#367d3a"; g.fillRect(i * bw, 0, bw + 1, FH); }
+  g.globalAlpha = 0.08;                                                                // blades of grass
+  for (let k = 0; k < 9000; k++) { g.fillStyle = rnd() < 0.5 ? "#1f4f22" : "#7bc47f"; g.fillRect(rnd() * FW, rnd() * FH, 1.5, 3); }
+  g.globalAlpha = 1; sheen(g, 0.1);
+  const m = 28, sx = (FW - 2 * m) / 105, sy = (FH - 2 * m) / 68, cy = FH / 2, X = (v) => m + v * sx, Y = (v) => cy + v * sy;
+  line(g, 3.5);
+  g.strokeRect(m, m, FW - 2 * m, FH - 2 * m);
+  g.beginPath(); g.moveTo(FW / 2, m); g.lineTo(FW / 2, FH - m); g.stroke();
+  g.beginPath(); g.ellipse(FW / 2, cy, 9.15 * sx, 9.15 * sy, 0, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = "#fff"; g.beginPath(); g.arc(FW / 2, cy, 3.5, 0, Math.PI * 2); g.fill();
+  mirrored(g, () => {
+    line(g, 3.5);
+    g.strokeRect(X(0), Y(-20.15), 16.5 * sx, 40.3 * sy);                             // penalty area
+    g.strokeRect(X(0), Y(-9.16), 5.5 * sx, 18.32 * sy);                              // goal area
+    g.fillStyle = "#fff"; g.beginPath(); g.arc(X(11), cy, 3, 0, Math.PI * 2); g.fill();   // penalty spot
+    const a = Math.acos(5.5 / 9.15);
+    g.beginPath(); g.ellipse(X(11), cy, 9.15 * sx, 9.15 * sy, 0, -a, a); g.stroke();   // the D
+    [-1, 1].forEach((d) => { g.beginPath(); g.ellipse(X(0), d < 0 ? m : FH - m, 1.2 * sx, 1.2 * sy, 0, d < 0 ? 0 : -Math.PI / 2, d < 0 ? Math.PI / 2 : 0); g.stroke(); });
+    g.fillStyle = "rgba(255,255,255,0.85)"; g.fillRect(m - 2.4 * sx, Y(-3.66), 2.4 * sx, 7.32 * sy);   // the goal mouth
+  });
+}
+function paintRink(g, rnd) {
+  g.fillStyle = "#1e2329"; g.fillRect(0, 0, FW, FH);
+  const m = 16, w = FW - 2 * m, h = FH - 2 * m, rr = h * 0.33;
+  const rink = () => { g.beginPath(); g.roundRect(m, m, w, h, rr); };
+  rink(); g.fillStyle = "#edf3f7"; g.fill();
+  g.save(); rink(); g.clip();
+  g.globalAlpha = 0.18;                                                                // skate scratches
+  for (let k = 0; k < 500; k++) { g.strokeStyle = rnd() < 0.5 ? "#c7d6e0" : "#ffffff"; g.lineWidth = 1; const x = rnd() * FW, y = rnd() * FH, a = rnd() * Math.PI;
+    g.beginPath(); g.moveTo(x, y); g.lineTo(x + Math.cos(a) * 40, y + Math.sin(a) * 12); g.stroke(); }
+  g.globalAlpha = 1; sheen(g, 0.25);
+  const sx = w / 61, sy = h / 26, cy = FH / 2, X = (v) => m + v * sx, Y = (v) => cy + v * sy;
+  g.fillStyle = "#c8202b"; g.fillRect(FW / 2 - 4, m, 8, h);                             // red center line
+  g.strokeStyle = "#2d58b8"; g.lineWidth = 3;
+  g.beginPath(); g.ellipse(FW / 2, cy, 4.57 * sx, 4.57 * sy, 0, 0, Math.PI * 2); g.stroke();
+  g.fillStyle = "#2d58b8"; g.beginPath(); g.arc(FW / 2, cy, 4, 0, Math.PI * 2); g.fill();
+  mirrored(g, () => {
+    g.fillStyle = "#2d58b8"; g.fillRect(X(30.5 - 7.62) - 4, m, 8, h);                 // blue line
+    g.fillStyle = "#c8202b"; g.fillRect(X(3.35) - 1.5, m, 3, h);                      // goal line
+    g.fillStyle = "rgba(90,150,225,0.55)"; g.beginPath(); g.ellipse(X(3.35), cy, 1.83 * sx, 1.83 * sy, 0, -Math.PI / 2, Math.PI / 2); g.fill();   // crease
+    g.strokeStyle = "#c8202b"; g.lineWidth = 3;
+    [-6.7, 6.7].forEach((d) => {
+      g.beginPath(); g.ellipse(X(9.45), Y(d), 4.57 * sx, 4.57 * sy, 0, 0, Math.PI * 2); g.stroke();   // faceoff circles
+      g.fillStyle = "#c8202b"; g.beginPath(); g.arc(X(9.45), Y(d), 4, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(X(30.5 - 9), Y(d), 3.5, 0, Math.PI * 2); g.fill();         // neutral zone dots
+    });
+    g.fillStyle = "#c8202b"; g.fillRect(X(3.35) - 16, cy - 10, 14, 20);               // the net, seen from above
+  });
+  g.restore();
+  g.lineWidth = 6; g.strokeStyle = "#f5f7f9"; rink(); g.stroke();                     // the boards
+  g.lineWidth = 2; g.strokeStyle = "#ffd23f"; g.beginPath(); g.roundRect(m + 3, m + 3, w - 6, h - 6, rr - 3); g.stroke();
+}
+function paintGridiron(g, rnd) {
+  const m = 20, sx = (FW - 2 * m) / 120, cy = FH / 2;
+  for (let i = 0; i < 24; i++) { g.fillStyle = i % 2 ? "#3b8a3f" : "#33793a"; g.fillRect(m + i * 5 * sx, 0, 5 * sx + 1, FH); }
+  g.fillStyle = "#2b6331"; g.fillRect(0, 0, m + 10 * sx, FH); g.fillRect(FW - m - 10 * sx, 0, m + 10 * sx, FH);   // end zones
+  g.globalAlpha = 0.07;
+  for (let k = 0; k < 8000; k++) { g.fillStyle = rnd() < 0.5 ? "#173d1b" : "#86c98a"; g.fillRect(rnd() * FW, rnd() * FH, 1.5, 2.5); }
+  g.globalAlpha = 1; sheen(g, 0.1);
+  g.save(); g.globalAlpha = 0.18; g.strokeStyle = "#fff"; g.lineWidth = 6;              // end zone stripes
+  [m, FW - m - 10 * sx].forEach((x0) => { for (let k = -FH; k < 10 * sx; k += 22) { g.beginPath(); g.moveTo(x0 + k, m); g.lineTo(x0 + k + FH, FH - m); g.stroke(); } });
+  g.restore();
+  line(g, 4); g.strokeRect(m, m, FW - 2 * m, FH - 2 * m);
+  for (let yd = 0; yd <= 100; yd += 5) {
+    const x = m + (10 + yd) * sx;
+    line(g, yd % 10 ? 1.5 : 3); g.beginPath(); g.moveTo(x, m); g.lineTo(x, FH - m); g.stroke();
+    if (yd % 10 === 0 && yd > 0 && yd < 100) {
+      const n = String(yd <= 50 ? yd : 100 - yd);
+      g.fillStyle = "rgba(255,255,255,0.9)"; g.font = "bold 22px sans-serif"; g.textAlign = "center";
+      g.fillText(n, x, m + 40); g.save(); g.translate(x, FH - m - 30); g.rotate(Math.PI); g.fillText(n, 0, -8); g.restore();
+    }
+  }
+  line(g, 1.5);
+  for (let yd = 1; yd < 100; yd++) {                                                  // hash marks
+    const x = m + (10 + yd) * sx;
+    [cy - 26, cy + 18].forEach((y) => { g.beginPath(); g.moveTo(x, y); g.lineTo(x, y + 8); g.stroke(); });
+  }
+}
+function paintDiamond(g, rnd) {
+  for (let i = 0; i < 16; i++) for (let j = 0; j < 9; j++) { g.fillStyle = (i + j) % 2 ? "#3f8f43" : "#378139"; g.fillRect(i * FW / 16, j * FH / 9, FW / 16 + 1, FH / 9 + 1); }
+  g.globalAlpha = 0.07;
+  for (let k = 0; k < 8000; k++) { g.fillStyle = rnd() < 0.5 ? "#1f4f22" : "#7bc47f"; g.fillRect(rnd() * FW, rnd() * FH, 1.5, 3); }
+  g.globalAlpha = 1; sheen(g, 0.12);
+  const hx = 70, cy = FH / 2, R = FW - hx - 30, s = FH * 0.27;                       // home plate at the left, outfield to the right
+  g.strokeStyle = "#a8774a"; g.lineWidth = 14; g.beginPath(); g.arc(hx, cy, R - 7, -0.62, 0.62); g.stroke();   // warning track
+  g.fillStyle = "#b9814f"; g.beginPath(); g.moveTo(hx, cy); g.arc(hx, cy, s * 2.05, -Math.PI / 4, Math.PI / 4); g.closePath(); g.fill();   // infield dirt
+  // the grass inside the base paths: the diamond (home, first, second, third), a little smaller than the paths
+  const ix = hx + s, k2 = 0.78;
+  g.fillStyle = "#3d8a41"; g.beginPath();
+  g.moveTo(ix - s * k2, cy); g.lineTo(ix, cy - s * k2); g.lineTo(ix + s * k2, cy); g.lineTo(ix, cy + s * k2); g.closePath(); g.fill();
+  line(g, 2.5);
+  [-1, 1].forEach((k) => { g.beginPath(); g.moveTo(hx, cy); g.lineTo(hx + Math.cos(k * Math.PI / 4) * R, cy + Math.sin(k * Math.PI / 4) * R); g.stroke(); });   // foul lines
+  const bases = [[hx + s, cy - s], [hx + 2 * s, cy], [hx + s, cy + s]];
+  g.fillStyle = "#fff";
+  bases.forEach(([x, y]) => { g.save(); g.translate(x, y); g.rotate(Math.PI / 4); g.fillRect(-6, -6, 12, 12); g.restore(); });
+  g.beginPath(); g.moveTo(hx - 6, cy - 6); g.lineTo(hx + 4, cy - 6); g.lineTo(hx + 9, cy); g.lineTo(hx + 4, cy + 6); g.lineTo(hx - 6, cy + 6); g.closePath(); g.fill();
+  g.fillStyle = "#b9814f"; g.beginPath(); g.arc(hx + s, cy, 16, 0, Math.PI * 2); g.fill();   // pitcher's mound
+  g.fillStyle = "#fff"; g.fillRect(hx + s - 2, cy - 6, 4, 12);
+}
+
+/* ---------- the balls ---------- */
+function ballTexture(kind) {
+  const W = 512, H = 256, cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const g = cv.getContext("2d"), rnd = seeded(kind.length * 131 + 7);
+  if (kind === "soccer") {
+    // white with black patches at the 12 corners of an icosahedron
+    const img = g.createImageData(W, H), t = (1 + Math.sqrt(5)) / 2;
+    const vs = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t], [0, -1, -t], [0, 1, -t], [t, 0, -1], [t, 0, 1], [-t, 0, -1], [-t, 0, 1]]
+      .map((v) => { const l = Math.hypot(v[0], v[1], v[2]); return v.map((c) => c / l); });
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const th = (x / W) * Math.PI * 2, ph = (y / H) * Math.PI, dx = -Math.cos(th) * Math.sin(ph), dy = Math.cos(ph), dz = Math.sin(th) * Math.sin(ph);
+      let best = -1; vs.forEach((v) => { best = Math.max(best, v[0] * dx + v[1] * dy + v[2] * dz); });
+      const dark = best > 0.955, edge = best > 0.94 && !dark, i = (y * W + x) * 4;
+      const c = dark ? 28 : edge ? 150 : 246;
+      img.data[i] = c; img.data[i + 1] = c; img.data[i + 2] = c + (dark ? 0 : 2); img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+  } else if (kind === "football") {
+    g.fillStyle = "#7a3d1c"; g.fillRect(0, 0, W, H);
+    g.globalAlpha = 0.15; for (let k = 0; k < 3000; k++) { g.fillStyle = rnd() < 0.5 ? "#3e1d0b" : "#a35a2e"; g.fillRect(rnd() * W, rnd() * H, 2, 2); } g.globalAlpha = 1;
+    g.fillStyle = "#f2efe8"; [0.16, 0.84].forEach((v) => { g.fillRect(0, v * H - 4, W * 0.2, 8); g.fillRect(W * 0.8, v * H - 4, W * 0.2, 8); });   // stripes near the ends
+    g.fillRect(0, H * 0.33, 6, H * 0.34); g.fillRect(W - 6, H * 0.33, 6, H * 0.34);      // laces along the top seam
+    for (let k = 0; k < 8; k++) { const y = H * 0.35 + k * H * 0.042; g.fillRect(0, y, 14, 4); g.fillRect(W - 14, y, 14, 4); }
+  } else if (kind === "baseball") {
+    g.fillStyle = "#f4f1ea"; g.fillRect(0, 0, W, H);
+    g.strokeStyle = "#c8202b"; g.lineWidth = 3;
+    [-1, 1].forEach((side) => {
+      g.beginPath();
+      for (let x = 0; x <= W; x += 4) { const y = H / 2 + side * 0 + Math.sin(x / W * Math.PI * 4) * H * 0.26; if (!x) g.moveTo(x, y); else g.lineTo(x, y); }
+      g.stroke();
+    });
+    g.lineWidth = 2;
+    for (let x = 0; x <= W; x += 9) { const y = H / 2 + Math.sin(x / W * Math.PI * 4) * H * 0.26; g.beginPath(); g.moveTo(x - 3, y - 5); g.lineTo(x + 3, y + 5); g.stroke(); }
+  } else {
+    // basketball: pebbled orange with black seams
+    g.fillStyle = "#d4621c"; g.fillRect(0, 0, W, H);
+    g.globalAlpha = 0.2; for (let k = 0; k < 6000; k++) { g.fillStyle = rnd() < 0.5 ? "#7a3008" : "#f08a45"; g.fillRect(rnd() * W, rnd() * H, 1.5, 1.5); } g.globalAlpha = 1;
+    g.strokeStyle = "#1a1210"; g.lineWidth = 4;
+    g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+    [0.25, 0.75].forEach((u) => { g.beginPath(); g.moveTo(u * W, 0); g.lineTo(u * W, H); g.stroke(); });
+    [0, 0.5].forEach((u) => { g.beginPath(); for (let y = 0; y <= H; y += 4) { const x = u * W + Math.sin(y / H * Math.PI) * W * 0.12; if (!y) g.moveTo(x, y); else g.lineTo(x, y); } g.stroke(); });
+  }
+  const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 4;
+  return tx;
+}
+function makeBallModel(kind) {
+  const grp = new THREE.Group(), spin = new THREE.Group(); grp.add(spin);
+  let mesh, r = 0.016, h = 0, e = 0.72, puck = false;
+  if (kind === "hockey") {
+    r = 0.012; h = 0.006; puck = true; e = 0;
+    mesh = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 28), new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.45 }));
+  } else {
+    const sizes = { basketball: [0.016, 0.74], soccer: [0.015, 0.62], football: [0.012, 0.45], baseball: [0.009, 0.5] }, sz = sizes[kind] || sizes.basketball;
+    r = sz[0]; e = sz[1];
+    mesh = new THREE.Mesh(new THREE.SphereGeometry(r, 32, 20), new THREE.MeshStandardMaterial({ map: ballTexture(kind), roughness: kind === "soccer" ? 0.45 : 0.7 }));
+    if (kind === "football") { mesh.scale.set(1, 1.65, 1); mesh.rotation.z = Math.PI / 2; }   // long axis lying along the court
+  }
+  spin.add(mesh);
+  return { grp, spin, r, h, e, puck };
+}
+function buildSports(market) {
+  FLOOR.mat = new THREE.MeshStandardMaterial({ map: floorTex("basketball"), roughness: 0.55, metalness: 0 });
+  // the floor "draws out" from the center line: anything farther from the middle than uReveal is not drawn yet
+  FLOOR.mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uReveal = FLOOR.u;
+    sh.fragmentShader = "uniform float uReveal;\n" + sh.fragmentShader.replace("#include <clipping_planes_fragment>",
+      "#include <clipping_planes_fragment>\n  if (abs(vMapUv.x - 0.5) > uReveal * 0.5 + 0.001) discard;");
+  };
+  FLOOR.mat.customProgramCacheKey = () => "tm-floor";
+  FLOOR.mesh = new THREE.Mesh(roundedRectGeo(0.62, 0.34, 0.022), FLOOR.mat);
+  FLOOR.mesh.rotation.x = -Math.PI / 2; FLOOR.mesh.position.y = 0.0042; FLOOR.mesh.renderOrder = 1; FLOOR.mesh.visible = false;
+  UI.base.object3D.add(FLOOR.mesh);
+  BALL.el = mk("a-entity", { class: "clickable" }, UI.game);
+  BALL.el.object3D.visible = false;
+  BALL.el.tmEnabled = () => inMarket() && BALL.on;
+  BALL.el.addEventListener("click", () => ballKick());
+}
+function ballShow(kind) {
+  Object.values(BALL.models).forEach((md) => { md.grp.visible = false; });
+  if (!kind) { BALL.on = false; BALL.el.object3D.visible = false; return; }
+  const md = BALL.models[kind] || (BALL.models[kind] = makeBallModel(kind));
+  if (!md.grp.parent) BALL.el.object3D.add(md.grp);
+  md.grp.visible = true;
+  Object.assign(BALL, { kind, r: md.r, h: md.h, e: md.e, puck: md.puck, spinGrp: md.spin, wy: 0, on: true });
+  BALL.p.set(0, md.puck ? FLOOR_Y + md.h / 2 : FLOOR_Y + md.r + 0.09, 0);          // it drops onto center court
+  BALL.v.set((Math.random() - 0.5) * 0.1, 0, (Math.random() - 0.5) * 0.1);
+  BALL.el.object3D.position.copy(BALL.p);
+  BALL.el.object3D.visible = true;
+}
+function ballKick() {
+  if (!BALL.on) return;
+  BALL.v.set((Math.random() - 0.5) * 1.2, BALL.puck ? 0 : 1.3, (Math.random() - 0.5) * 0.8);
+  if (BALL.puck) BALL.wy = (Math.random() - 0.5) * 24;
+}
+const bv1 = new THREE.Vector3(), bq = new THREE.Quaternion(), baxis = new THREE.Vector3();
+// every frame for each tracked hand: a fingertip or the palm touching the ball hits it with the hand's speed
+function ballTouch(i, joints) {
+  if (!BALL.on || !joints || !inMarket()) return;
+  const mkt = document.getElementById("market").object3D, now = performance.now();
+  const mem = BALL.hands[i] || (BALL.hands[i] = { prev: {}, t: now, cool: 0 });
+  const dt = (now - mem.t) / 1000;
+  let hit = null;
+  for (const k of GRAB_PTS) {
+    const lp = mkt.worldToLocal(bv1.copy(joints[k]));
+    const prev = mem.prev[k] || (mem.prev[k] = lp.clone());
+    if (!hit && now > mem.cool && lp.distanceTo(BALL.p) < BALL.r + 0.013)
+      hit = { at: lp.clone(), v: dt > 0 && dt < 0.1 ? lp.clone().sub(prev).divideScalar(dt) : new THREE.Vector3() };
+    prev.copy(lp);
+  }
+  mem.t = now;
+  if (!hit) return;
+  const n = BALL.p.clone().sub(hit.at);
+  if (BALL.puck) n.y = 0;
+  if (n.lengthSq() < 1e-8) n.set(0, 1, 0);
+  n.normalize();
+  const push = Math.max(0.25, hit.v.dot(n));
+  BALL.v.copy(hit.v).multiplyScalar(1.1).addScaledVector(n, push * 0.6);
+  if (BALL.puck) { BALL.v.y = 0; BALL.wy = (Math.random() - 0.5) * 24; }
+  if (BALL.v.length() > 3) BALL.v.setLength(3);
+  BALL.p.copy(hit.at).addScaledVector(n, BALL.r + 0.014);
+  if (!BALL.puck) BALL.p.y = Math.max(BALL.p.y, FLOOR_Y + BALL.r);
+  mem.cool = now + 120;
+}
+function stepBall(now) {
+  const dt0 = Math.min(0.05, Math.max(0.001, (now - (BALL.last || now)) / 1000));
+  BALL.last = now;
+  if (!BALL.on || !inMarket()) return;
+  const steps = Math.ceil(dt0 / 0.008), dt = dt0 / steps, B = BALL;
+  for (let s = 0; s < steps; s++) {
+    if (!B.puck) B.v.y += BALL_G * dt;
+    B.v.x -= phys.acc.x * dt * 0.5; B.v.z -= phys.acc.z * dt * 0.5;                    // the table moving sloshes it
+    B.p.addScaledVector(B.v, dt);
+    const fy = FLOOR_Y + B.r;
+    if (B.puck) { B.p.y = FLOOR_Y + B.h / 2; B.v.y = 0; }
+    else if (B.p.y < fy) {
+      B.p.y = fy;
+      if (B.v.y < 0) {
+        B.v.y = -B.v.y * B.e;
+        if (B.v.y < 0.06) B.v.y = 0;
+        else if (B.kind === "football") { B.v.x += (Math.random() - 0.5) * 0.5; B.v.z += (Math.random() - 0.5) * 0.5; }   // odd bounces
+      }
+    }
+    if (B.puck || B.p.y <= fy + 0.0005) { const f = Math.max(0, 1 - dt * (B.puck ? 0.35 : 1.1)); B.v.x *= f; B.v.z *= f; }
+    if (Math.abs(B.p.x) > COURT_XB - B.r) { B.p.x = Math.sign(B.p.x) * (COURT_XB - B.r); B.v.x = -B.v.x * 0.72; }   // invisible walls
+    if (Math.abs(B.p.z) > COURT_ZB - B.r) { B.p.z = Math.sign(B.p.z) * (COURT_ZB - B.r); B.v.z = -B.v.z * 0.72; }
+    if (B.p.y > 0.4) { B.p.y = 0.4; B.v.y = -Math.abs(B.v.y) * 0.5; }
+  }
+  // spin: rolling along the floor, or a puck spinning flat
+  const sp = Math.hypot(B.v.x, B.v.z);
+  if (B.puck) { B.spinGrp.rotation.y += B.wy * dt0; B.wy *= Math.max(0, 1 - dt0 * 0.9); }
+  else if (sp > 0.001) { baxis.set(B.v.z, 0, -B.v.x).normalize(); bq.setFromAxisAngle(baxis, sp / B.r * dt0); B.spinGrp.quaternion.premultiply(bq); }
+  B.el.object3D.position.copy(B.p);
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
+  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
-  frame: (now) => { stepFollow(now); stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); stepHands(now); },
+  frame: (now) => { stepFollow(now); stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); stepHands(now); stepBall(now); },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
   hoverBegin: () => { hover.raw[0] = hover.raw[1] = 0; },
   hoverAt: (point, ray) => {
