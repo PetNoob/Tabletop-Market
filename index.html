@@ -2577,7 +2577,6 @@ function pileText(i, value, change) {
 function grabBegin(i, frac, point) {
   const pile = PILES[i];
   if (!pickAt(i) || !pile.count()) return false;
-  sfx("pick", 0.4, 0.9);                                                                    // picking the cash up: the pick chime, a touch lower
   grab.i = i; grab.over = true;
   pile.setLit(0); pile.hold(frac, point || pileCenter(i).clone());
   UI.wallet.setColor(C.walletOn);
@@ -2973,7 +2972,7 @@ function addPay() {
     logActivity(out ? { side: "Withdrew", title: "Withdrew to bank (test, simulated)", what: "Test bank", amount: amt }
                     : { side: "Added", title: "Added money (test card, simulated)", what: "Test card", amount: amt });
     saveTestState();
-    ADD.busy = false; ADD.step = "done"; sfx("chaching", 0.55);
+    ADD.busy = false; ADD.step = "done"; sfx("pick", 0.55);
     refreshAdd(); refresh();
     UI.balance.setAttribute("color", out ? C.red : C.acc);
     setTimeout(() => UI.balance.setAttribute("color", C.text), 900);
