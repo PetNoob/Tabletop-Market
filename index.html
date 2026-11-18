@@ -268,6 +268,7 @@ AFRAME.registerComponent("xr-input", {
             H.geo.attributes.position.needsUpdate = true;
             H.group.visible = SETTINGS.handStyle === "outline"; hi++;
             if (window.TM && window.TM.drawGlove) window.TM.drawGlove(hi - 1, H.joints);
+            if (window.TM && window.TM.handTouch) window.TM.handTouch(hi - 1, H.joints);
             this.tips[src.handedness] = H.joints[9].clone();
             if (window.TM) window.TM.fingerAt(src.handedness, H.joints[9]);
             // pinch point = halfway between thumb tip and index tip
@@ -2059,7 +2060,7 @@ function stepPulse(now) {
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j),
+  state, press, openMarket, backToLobby, phys, shove, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => grokTouch(i, j),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => { stepPhysics(now); stepGrab(); stepAnims(now); PILES.forEach((p) => p.update(now)); stepPulse(now); stepOrb(now); },
@@ -2134,11 +2135,11 @@ function showEnterChoices() {
   windowBtn.style.display = arReady ? "block" : "none";
 }
 enterBtn.addEventListener("click", () => {
-  try { aiAudio(); if (store.get("tm-voice") === "1") wakeStart(); } catch (e) {}
+  try { aiAudio(); } catch (e) {}
   closeWelcome();
   if (arReady && scene.enterAR) Promise.resolve(scene.enterAR()).catch((err) => console.warn("AR did not start:", err));
 });
-windowBtn.addEventListener("click", () => { try { aiAudio(); if (store.get("tm-voice") === "1") wakeStart(); } catch (e) {} closeWelcome(); });
+windowBtn.addEventListener("click", () => { try { aiAudio(); } catch (e) {} closeWelcome(); });
 // owner only: type the passcode to switch from test money to real Gemini orders
 const liveBtn = document.getElementById("liveBtn");
 if (S.serverUrl) liveBtn.style.display = "block";
@@ -2429,12 +2430,14 @@ arcPanel.addEventListener("click", (ev) => {
   }
 });
 /* ---------- Grok: a little floating flame-spirit on your table ----------
-   Say "Hey Grok": he answers "Hey!", "Yeah?" or "What's up?" and listens. Ask your question; it goes to the server
-   as audio (ElevenLabs turns it into text), Grok answers with what is on the table right now, and the answer is
-   spoken back in ElevenLabs' voice. "Hey Grok, why is Boston up?" in one breath works too. Tapping him also wakes him.
-   He explains markets and moves around the app; he never recommends a bet and never touches money.
-   Listening: the microphone stays on; a simple loudness check cuts out each sentence and only sentences are sent. */
+   He starts asleep: eyes shut, slow breathing, a lazy flame and little z's floating up. Nothing is sent anywhere
+   while he sleeps. Pat him with your hand (or tap or pinch him) to wake him: he gets knocked the way your hand moved,
+   squishes and wobbles, his flame flares, then he says "Hey!", "Yeah?" or "What's up?" and listens.
+   While awake, just talk: each sentence goes to the server as audio (ElevenLabs turns it into text), Grok answers
+   with what is on the table right now, and the answer is spoken in ElevenLabs' voice. After about 25 quiet seconds
+   he dozes off again. He explains markets and moves around the app; he never recommends a bet or touches money. */
 const AI = { mode: "sleep", ready: null, lvl: 0, buf: null, listening: false, floor: 0.02, greet: [], placed: false, last: 0,
+             squash: 0, squashV: 0, flare: 0, wakeT: -1e9, touch: [{}, {}],
              nextBlink: 0, blinkT: -1e9, hopT: -1e9 };
 const WAKE = /\b(hey|hi|hay|ok|okay|yo|a)\W{0,3}(grok|grock|groc|grog|groke|growk|brock|crock|rock|grow)\b/i;
 const GREETINGS = ["Hey!", "Yeah?", "What's up?"];
@@ -2502,11 +2505,10 @@ function buildOrb(market) {
     return e;
   });
   UI.orbNote = label(at, "", 0, -0.05, 0, 0.0055, C.dim);             // only shows a problem, briefly
-  // tapping him works too: fingertip, pinch, trigger or mouse
-  const b = { el: at, t: null, w: 0.08, h: 0.08, d: 0.08, onPress: orbPressed, enabled: () => true, inside: {}, last: 0, z: 0, noPush: true };
-  at.tmEnabled = b.enabled;
-  at.addEventListener("click", (e) => press(b, e));
-  BUTTONS.push(b);
+  UI.zs = ["z", "Z", "z"].map((z, i) => label(at, z, 0.02, 0.03, 0.01, 0.006 + i * 0.0015, "#c9d1da"));
+  // a pinch, controller trigger or mouse click on him counts as a pat (hands touching him are handled in grokTouch)
+  at.tmEnabled = () => true;
+  at.addEventListener("click", () => grokPat(gv5.set(0, -0.6, 0), 0.6));
   AI.pos = new THREE.Vector3(); AI.vel = new THREE.Vector3();
   fetch(aiUrl("/status")).then((r) => r.json()).then((s) => { AI.ready = !!(s.voice && s.grok); }).catch(() => { AI.ready = false; });
 }
@@ -2533,11 +2535,42 @@ async function aiPost(p, body, json) {
   if (!r.ok || j.error) throw new Error(j.error || ("server said " + r.status));
   return j;
 }
-function orbPressed() {
-  if (AI.mode === "speaking") { try { AI.src && AI.src.stop(); } catch (e) {} return; }   // tap while he talks = hush
+// a pat: knock him the way the hand moved, squish him, flare the flame; wake him if he is asleep
+function grokPat(handVel, strength) {
+  if (!UI.orbAt) return;
+  const now = performance.now();
+  AI.vel.addScaledVector(handVel, 0.55);
+  if (AI.vel.length() > 1.6) AI.vel.setLength(1.6);
+  AI.squashV += 6 + 10 * strength;
+  AI.flare = Math.min(1, AI.flare + 0.5 + strength);
+  if (AI.mode === "speaking") { try { AI.src && AI.src.stop(); } catch (e) {} return; }    // patting him while he talks = hush
+  if (AI.mode !== "sleep" || now - AI.wakeT < 1500) { if (AI.mode === "awake") AI.awakeT = now; return; }
+  AI.wakeT = now;
   if (AI.ready === false) return aiNote("Grok is not set up on the server yet");
-  if (!AI.listening) wakeStart().then(() => { if (AI.listening) aiGreet(); });
-  else if (AI.mode === "sleep") aiGreet();
+  AI.blinkT = now;                                                       // a startled blink
+  const go = () => setTimeout(aiGreet, 350);
+  if (!AI.listening) wakeStart().then(go); else go();
+}
+// every frame for each tracked hand: if any fingertip or the palm is touching him, that is a pat
+const GRAB_PTS = [4, 9, 14, 19, 24, 0, 11];
+function grokTouch(i, joints) {
+  if (!UI.orbAt || !joints) return;
+  const now = performance.now(), mem = AI.touch[i] || (AI.touch[i] = {}), o = UI.orbAt.object3D;
+  const R = 0.04 * o.scale.y;
+  let hit = -1, best = 1;
+  for (const k of GRAB_PTS) { const d = joints[k].distanceTo(o.position); if (d < R && d < best) { best = d; hit = k; } }
+  if (hit >= 0) {
+    const prev = mem.p && mem.k === hit ? mem.p : null, dt = (now - (mem.t || now)) / 1000;
+    const v = prev && dt > 0 && dt < 0.1 ? gv4.copy(joints[hit]).sub(prev).divideScalar(dt) : gv4.set(0, -0.3, 0);
+    // push him out of the hand so he never sits inside it
+    gq1.identity();
+    gv3.copy(o.position).sub(joints[hit]);
+    if (gv3.lengthSq() > 1e-8) AI.pos.addScaledVector(gv3.normalize(), (R - best) * 0.6);
+    if (!mem.in || v.length() > 0.25) grokPat(v, Math.min(1, v.length()));
+    mem.in = true;
+  } else mem.in = false;
+  mem.k = hit >= 0 ? hit : 9;
+  mem.p = (mem.p || new THREE.Vector3()).copy(joints[mem.k]); mem.t = now;
 }
 
 // ---------- the microphone: always listening for "Hey Grok" ----------
@@ -2579,7 +2612,7 @@ function analyserLevel(an) {
 function vadTick() {
   if (!AI.listening) return;
   const now = performance.now(), age = now - AI.recT0;
-  if (AI.mode === "thinking" || AI.mode === "speaking") { if (age > 1500) recCut(false); return; }   // do not listen to himself
+  if (AI.mode !== "awake") { if (age > 1500) recCut(false); return; }   // asleep, thinking or talking: nothing is sent
   const lvl = analyserLevel(AI.micAn);
   AI.micLvl = lvl;
   const loud = lvl > AI.floor * 2.4 + 0.012;
@@ -2589,7 +2622,8 @@ function vadTick() {
   if (AI.speech && AI.quietMs > 650) return recCut(true);               // a sentence just ended: check it
   if (AI.speech && age > 12000) return recCut(true);                    // a long one: check what we have
   if (!AI.speech && age > 6000) recCut(false);                          // nothing said: start a fresh clip
-  if (AI.mode === "awake" && !AI.speech && now - AI.awakeT > 9000) aiMode("sleep");   // no question came: back to dozing
+  if (AI.speech) AI.awakeT = now;
+  if (!AI.speech && now - AI.awakeT > 25000) aiMode("sleep");           // 25 quiet seconds: he dozes off
 }
 async function handleClip(blob) {
   if (!blob || blob.size < 1500) return;
@@ -2597,17 +2631,10 @@ async function handleClip(blob) {
   try { heard = String((await aiPost("/stt", blob, false)).text || "").trim(); }
   catch (e) { console.warn("listening:", e.message); if (/not set up|429|Too many/i.test(e.message)) aiNote(e.message); return; }
   if (!heard) return;
+  if (AI.mode !== "awake") return;
   const m = heard.match(WAKE);
-  if (AI.mode === "sleep") {
-    if (!m) return;                                                     // not talking to Grok
-    const rest = heard.slice(m.index + m[0].length).replace(/^[\s,.!?]+/, "");
-    if (rest.split(/\s+/).filter(Boolean).length >= 3) return aiAnswer(rest);
-    return aiGreet();
-  }
-  if (AI.mode === "awake") {
-    const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "");
-    if (q.split(/\s+/).filter(Boolean).length) aiAnswer(q);
-  }
+  const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "");
+  if (q.split(/\s+/).filter(Boolean).length) aiAnswer(q);
 }
 
 // ---------- talking ----------
@@ -2645,8 +2672,8 @@ async function aiAnswer(q) {
   try {
     const a = await aiPost("/ask", { question: q, context: aiContext() }, true);
     aiDo(a.action);
-    await aiSpeak(a.say || "Hmm, I'm not sure about that one.", "sleep");
-  } catch (e) { console.warn("answer:", e.message); aiNote(e.message); aiMode("sleep"); }
+    await aiSpeak(a.say || "Hmm, I'm not sure about that one.", "awake");
+  } catch (e) { console.warn("answer:", e.message); aiNote(e.message); aiMode("awake"); }
 }
 // what is on the table right now, in plain words, for Grok
 function aiContext() {
@@ -2703,37 +2730,52 @@ function stepOrb(now) {
   if (AI.mode === "speaking" && AI.outAn) lvl = Math.min(1, analyserLevel(AI.outAn) * 5);
   else if (AI.mode === "awake" && AI.micAn) lvl = Math.min(1, (AI.micLvl || 0) * 4);
   AI.lvl = AI.lvl * 0.75 + lvl * 0.25;
-  // floating, talking bounces, and a little hop when he wakes up
+  // floating (slow and low when asleep), talking bounces, and a little hop when he wakes up
+  const asleep = AI.mode === "sleep";
   const hop = Math.max(0, 1 - (now - AI.hopT) / 450);
-  const bob = 0.005 * Math.sin(t * 1.7) + (AI.mode === "speaking" ? 0.007 * Math.abs(Math.sin(t * 9)) * (0.35 + AI.lvl) : 0)
+  const bob = (asleep ? 0.003 * Math.sin(t * 0.9) - 0.008 : 0.005 * Math.sin(t * 1.7))
+            + (AI.mode === "speaking" ? 0.007 * Math.abs(Math.sin(t * 9)) * (0.35 + AI.lvl) : 0)
             + 0.025 * Math.sin(Math.PI * (1 - hop)) * (hop > 0 ? 1 : 0);
   o.position.copy(AI.pos); o.position.y += bob;
+  // jelly: a pat squishes him and he wobbles back
+  AI.squashV += (-AI.squash * 260 - AI.squashV * 9) * dt;
+  AI.squash += AI.squashV * dt;
+  AI.squash = clamp(AI.squash, -0.45, 0.45);
+  AI.flare = Math.max(0, AI.flare - dt * 1.6);
   // he always faces you
   const cam = document.querySelector("a-scene").camera;
   if (cam) { cam.getWorldPosition(gv5); gv5.y = Math.min(gv5.y, o.position.y + 0.4); o.lookAt(gv5); }
-  // squash and stretch while talking
-  const sq = AI.mode === "speaking" ? 0.06 * AI.lvl * Math.sin(t * 18) : 0;
-  o.scale.set(1 + sq, 1 - sq, 1 + sq);
+  // squash and stretch: talking, breathing while asleep, and the jelly wobble from a pat
+  const sq = (AI.mode === "speaking" ? 0.06 * AI.lvl * Math.sin(t * 18) : 0) + (asleep ? 0.03 * Math.sin(t * 1.2) : 0) + AI.squash;
+  o.scale.set(1 + sq * 0.6, 1 - sq, 1 + sq * 0.6);
   // the flame: calm when dozing, bright when listening, busy when thinking, pulsing with his voice; it trails behind his motion
-  const power = AI.mode === "sleep" ? 0.35 : AI.mode === "awake" ? 0.95 : AI.mode === "thinking" ? 0.6 + 0.3 * Math.sin(t * 7) : 0.55 + AI.lvl * 0.9;
+  const power = (asleep ? 0.12 : AI.mode === "awake" ? 0.95 : AI.mode === "thinking" ? 0.6 + 0.3 * Math.sin(t * 7) : 0.55 + AI.lvl * 0.9) + AI.flare;
   gq1.copy(o.quaternion).invert();
   const lean = gv4.copy(AI.vel).multiplyScalar(-0.05);
   if (lean.length() > 0.03) lean.setLength(0.03);
   lean.applyQuaternion(gq1);
   UI.flames.forEach((f, i) => {
-    f.uniforms.uTime.value = t + i * 7.3;
+    f.uniforms.uTime.value = (asleep ? t * 0.45 : t) + i * 7.3;            // a lazy flame while he sleeps
     f.uniforms.uPower.value += (power - f.uniforms.uPower.value) * Math.min(1, dt * 6);
     f.uniforms.uLean.value.lerp(lean, Math.min(1, dt * 8));
   });
   // eyes: blink now and then, bigger when listening, glance up while thinking, happy squint while talking
   if (now > AI.nextBlink) { AI.blinkT = now; AI.nextBlink = now + 2200 + Math.random() * 3200; if (Math.random() < 0.2) AI.nextBlink = now + 260; }
   const bk = clamp((now - AI.blinkT) / 150, 0, 1), blink = bk < 1 ? 0.12 + 0.88 * Math.abs(1 - 2 * bk) : 1;
-  const size = AI.mode === "awake" ? 1.25 : AI.mode === "sleep" ? 0.9 : 1;
-  const tall = AI.mode === "speaking" ? 0.7 + 0.15 * Math.sin(t * 9) : AI.mode === "sleep" ? 0.75 : 1;
+  const size = AI.mode === "awake" ? 1.25 : asleep ? 1.05 : 1;
+  const tall = AI.mode === "speaking" ? 0.7 + 0.15 * Math.sin(t * 9) : asleep ? 0.12 : 1;   // asleep: eyes shut to thin lines
   UI.eyes.forEach((e, i) => {
     e.scale.set(size, size * tall * blink, 0.5);
     e.position.x = (i ? 1 : -1) * 0.0065 + (AI.mode === "thinking" ? 0.002 * Math.sin(t * 1.3) : 0);
-    e.position.y = 0.0025 + (AI.mode === "thinking" ? 0.003 : 0);
+    e.position.y = 0.0025 + (AI.mode === "thinking" ? 0.003 : 0) - (asleep ? 0.0015 : 0);
+  });
+  // z's drift up and fade while he sleeps
+  UI.zs.forEach((z, i) => {
+    const k = ((t * 0.35 + i / 3) % 1);
+    z.object3D.visible = asleep;
+    if (!asleep) return;
+    z.object3D.position.set(0.018 + k * 0.02 + 0.004 * Math.sin(t * 2 + i), 0.025 + k * 0.05, 0.01);
+    setTextOpacity(z, Math.sin(Math.PI * k));
   });
 }
 

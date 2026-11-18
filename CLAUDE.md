@@ -220,6 +220,8 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - Gloves: the A-Frame hand-tracking-controls model is no longer used. `drawGlove(i, joints)` draws each hand from the 25 joints xr-input already reads (InstancedMesh tubes for GLOVE_SEGS and balls for joints, radii JR), depth pre-pass then rim-lit see-through skin.
 - Needs the worker re-pasted (voice list, personality, rate limit).
 
+- Grok v3 (Nov 17, UNTESTED; page start checked): Brian asked for a sleeping animation and pat-to-wake with physics. Grok starts asleep (eyes shut to lines, slow breathing, lazy dim flame, floating z's, sits lower); nothing is sent to ElevenLabs while asleep. `grokTouch` (called per hand from xr-input via TM.handTouch) treats any fingertip or palm joint within 4 cm as a pat: `grokPat` adds the hand's velocity to his spring, a jelly squash (spring 260/9), and a flame flare, pushes him out of the hand, and if asleep wakes him (startled blink, hop, greeting, then awake). Pinch/trigger/mouse click on him also pats. Awake: every sentence is a question (wake word not needed); he stays awake after answering and dozes off after 25 quiet seconds. The mic starts on the first pat (not on Enter). Patting him while he talks stops him.
+
 ## Known unknowns
 - How to sign transactions inside the Quest browser (no wallet extensions). Plan: Circle's wallet tooling, or an app-held demo wallet. Ask Circle.
 - Whether Arc testnet has a yield source. Whether Gemini has a trading sandbox (none found; real trading needs a funded, verified account, so it is a bonus at most).
