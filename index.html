@@ -3058,40 +3058,46 @@ function drawGlove(i, joints) {
 /* ---------- hands: a soft, Quest-style overlay ----------
    WebXR gives each hand as 25 joint poses (position and rotation). It does not give a hand outline or a camera image,
    so a faithful silhouette needs a hand-shaped mesh: we load the Oculus hand model (a skinned mesh, hosted by A-Frame)
-   and pose its 25 bones from the joints every frame, like the Quest system does. Then three passes:
+   and pose its bones from the joints every frame, matching each bone to its joint BY NAME (the left and right models
+   list their bones in different orders). Then three passes:
      1. depth only, so the hand hides what is behind it and fingers never show through each other;
      2. an outline: the mesh pushed out a little along its surface, back faces only, so it shows just outside the
         edge, including the gaps between fingers; a second, wider and fainter copy is the soft glow;
-     3. a faint see-through fill that is a little brighter toward the edges.
-   It fades out when tracking is lost, fades back in when it returns, and brightens slightly while you pinch.
-   If the model cannot load, the older simple glove (drawGlove) is used instead. */
+     3. a see-through grey fill, like the app's panels, a little lighter toward the edges.
+   Everything fades out toward the wrist. The hand fades out when tracking is lost, back in when it returns,
+   and brightens a little while you pinch. If the model cannot load, the older simple glove (drawGlove) is used. */
 const HANDS = { left: null, right: null, last: 0 };
 const HAND_URL = "https://cdn.aframe.io/controllers/oculus-hands/v4/";
+const JOINT_NAMES = ["wrist",
+  "thumb-metacarpal", "thumb-phalanx-proximal", "thumb-phalanx-distal", "thumb-tip",
+  "index-finger-metacarpal", "index-finger-phalanx-proximal", "index-finger-phalanx-intermediate", "index-finger-phalanx-distal", "index-finger-tip",
+  "middle-finger-metacarpal", "middle-finger-phalanx-proximal", "middle-finger-phalanx-intermediate", "middle-finger-phalanx-distal", "middle-finger-tip",
+  "ring-finger-metacarpal", "ring-finger-phalanx-proximal", "ring-finger-phalanx-intermediate", "ring-finger-phalanx-distal", "ring-finger-tip",
+  "pinky-finger-metacarpal", "pinky-finger-phalanx-proximal", "pinky-finger-phalanx-intermediate", "pinky-finger-phalanx-distal", "pinky-finger-tip"];
+// shader pieces shared by every pass: where each point is in the room, and how far it is from the wrist toward the knuckles
+const HAND_VERT_DECL = "varying vec3 tmWorld;\nuniform float uThick;\n";
+const HAND_VERT_BODY = "#include <skinning_vertex>\n  transformed += normalize(objectNormal) * uThick;\n  tmWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;";
+const HAND_FRAG_DECL = "varying vec3 tmWorld;\nuniform float uA;\nuniform float uP;\nuniform vec3 uWrist;\nuniform vec3 uAxis;\nuniform float uLen;\n";
+const HAND_FADE = "  float tmFade = smoothstep(-0.05, 0.6, dot(tmWorld - uWrist, uAxis) / uLen);\n";
 function handMaterials() {
-  const uA = { value: 0 };                                            // overall strength: fade times pinch boost
-  const pre = new THREE.MeshBasicMaterial({ colorWrite: false });
-  const hull = (thick, alpha, key) => {
-    const m = new THREE.MeshBasicMaterial({ color: 0xeef2f6, transparent: true, depthWrite: false, side: THREE.BackSide });
+  const u = { uA: { value: 0 }, uP: { value: 0 }, uWrist: { value: new THREE.Vector3() }, uAxis: { value: new THREE.Vector3(0, 1, 0) }, uLen: { value: 0.09 } };
+  const hook = (m, thick, key, fragBody) => {
     m.onBeforeCompile = (sh) => {
-      sh.uniforms.uA = uA; sh.uniforms.uThick = { value: thick };
-      sh.vertexShader = "uniform float uThick;\n" + sh.vertexShader.replace("#include <skinning_vertex>",
-        "#include <skinning_vertex>\n  transformed += normalize(objectNormal) * uThick;");
-      sh.fragmentShader = "uniform float uA;\n" + sh.fragmentShader.replace("#include <dithering_fragment>",
-        "#include <dithering_fragment>\n  gl_FragColor.a = " + alpha.toFixed(3) + " * uA;");
+      Object.assign(sh.uniforms, u, { uThick: { value: thick } });
+      sh.vertexShader = HAND_VERT_DECL + sh.vertexShader.replace("#include <skinning_vertex>", HAND_VERT_BODY);
+      sh.fragmentShader = HAND_FRAG_DECL + sh.fragmentShader.replace("#include <dithering_fragment>", "#include <dithering_fragment>\n" + HAND_FADE + fragBody);
     };
-    m.customProgramCacheKey = () => "tm-hand-" + key;
+    m.customProgramCacheKey = () => "tm-hand2-" + key;
     return m;
   };
-  const fill = new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, depthWrite: false, roughness: 1 });
-  fill.onBeforeCompile = (sh) => {
-    sh.uniforms.uA = uA;
-    sh.fragmentShader = "uniform float uA;\n" + sh.fragmentShader.replace("#include <dithering_fragment>", [
-      "#include <dithering_fragment>",
-      "  float tmEdge = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);",
-      "  gl_FragColor = vec4(vec3(0.86, 0.89, 0.93), (0.06 + 0.14 * tmEdge) * uA);"].join("\n"));
-  };
-  fill.customProgramCacheKey = () => "tm-hand-fill";
-  return { uA, pre, line: hull(0.0011, 0.55, "line"), glow: hull(0.0034, 0.14, "glow"), fill };
+  const pre = new THREE.MeshBasicMaterial({ colorWrite: false });
+  const hull = (thick, alpha, key) => hook(new THREE.MeshBasicMaterial({ color: 0xeef2f6, transparent: true, depthWrite: false, side: THREE.BackSide }),
+    thick, key, "  gl_FragColor = vec4(vec3(0.93, 0.95, 0.97), " + alpha.toFixed(3) + " * uA * (1.0 + 0.5 * uP) * tmFade);");
+  const fill = hook(new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, depthWrite: false, roughness: 1 }), 0, "fill", [
+    "  float tmEdge = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);",
+    "  vec3 tmCol = mix(vec3(0.20, 0.215, 0.24), vec3(0.40, 0.43, 0.48), tmEdge * 0.6) + 0.10 * uP;",
+    "  gl_FragColor = vec4(tmCol, (0.66 + 0.14 * tmEdge) * uA * tmFade);"].join("\n"));
+  return { u, pre, line: hull(0.0011, 0.55, "line"), glow: hull(0.0034, 0.14, "glow"), fill };
 }
 function loadHand(side) {
   const h = HANDS[side] = { ready: false, failed: false, a: 0, target: 0, pinch: 0, mats: handMaterials(),
@@ -3102,7 +3108,9 @@ function loadHand(side) {
     const mesh = g.scene.children[0], sk = g.scene.getObjectByProperty("type", "SkinnedMesh");
     if (!mesh || !sk) { h.failed = true; return; }
     mesh.position.set(0, 0, 0); mesh.rotation.set(0, 0, 0);          // the bones are posed directly in room space
-    h.bones = sk.skeleton.bones;
+    const bones = sk.skeleton.bones;
+    h.byJoint = JOINT_NAMES.map((n) => bones.find((b) => b.name === n) || null);   // each joint's bone, found by name
+    if (h.byJoint.filter(Boolean).length < 20) { console.warn("hand model: bone names did not match"); h.failed = true; return; }
     sk.material = h.mats.pre; sk.renderOrder = 20; sk.frustumCulled = false;
     const copy = (mat, order) => {
       const m = sk.clone(); m.bind(sk.skeleton, sk.bindMatrix);
@@ -3124,14 +3132,20 @@ function handPose(side, joints, quats) {
   h.target = 1;
   if (!h.ready) { if (h.failed) drawGlove(idx, joints); return; }
   // light smoothing: steady when still, quick when moving, so it neither jitters nor lags
-  const n = Math.min(25, h.bones.length);
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < 25; i++) {
     const a = h.fresh ? 1 : clamp(0.45 + joints[i].distanceTo(h.sp[i]) * 60, 0.45, 1);
     h.sp[i].lerp(joints[i], a);
     if (quats && quats[i]) { if (h.fresh) h.sq[i].copy(quats[i]); else h.sq[i].slerp(quats[i], a); }
-    h.bones[i].position.copy(h.sp[i]); h.bones[i].quaternion.copy(h.sq[i]);
+    const bone = h.byJoint[i];
+    if (bone) { bone.position.copy(h.sp[i]); bone.quaternion.copy(h.sq[i]); }
   }
   h.fresh = false;
+  // the fade toward the wrist: from the wrist joint toward the middle knuckle
+  const u = h.mats.u;
+  u.uWrist.value.copy(h.sp[0]);
+  u.uAxis.value.subVectors(h.sp[11], h.sp[0]);
+  u.uLen.value = Math.max(0.03, u.uAxis.value.length());
+  u.uAxis.value.normalize();
   // pinch: thumb tip near index tip
   const pinch = clamp((0.035 - joints[4].distanceTo(joints[9])) / 0.02, 0, 1);
   h.pinch += (pinch - h.pinch) * 0.3;
@@ -3145,7 +3159,8 @@ function stepHands(now) {
     if (!h || !h.ready) return;
     h.a += (h.target - h.a) * Math.min(1, dt * (h.target > h.a ? 10 : 6));
     if (h.a < 0.01 && h.target === 0) h.fresh = true;                 // next time it appears, start from the new pose
-    h.mats.uA.value = h.a * (1 + 0.6 * h.pinch);
+    h.mats.u.uA.value = h.a;
+    h.mats.u.uP.value = h.pinch;
     h.root.visible = h.a > 0.01;
   });
 }

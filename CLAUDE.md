@@ -274,3 +274,4 @@ A prediction market you can put on your table: a mixed reality (passthrough) web
 - 2–3 minute demo video (Google Drive or YouTube, viewable by judges)
 - README with technical documentation and architecture overview
 - Devpost: project name, description, team, track, chain award (Arc), bounties, five written answers (what you built, problem, how it works, what is unique, what is next), technologies and sponsor tools used
+- Nov 17 hand fix (UNTESTED): the left hand was scrambled because bones were matched by list position; the left GLB lists its 25 bones in reverse order (pinky tip first; checked by reading the file). Bones are now matched by joint name (`JOINT_NAMES`, `h.byJoint`). Fill is now see-through dark grey (about 66 to 80 percent opaque, lighter at the edges) instead of a faint white tint, and the fill, outline and glow all fade out toward the wrist (`tmFade`, along wrist to middle knuckle; uniforms uWrist/uAxis/uLen set in handPose).
