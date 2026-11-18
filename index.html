@@ -2612,13 +2612,20 @@ function analyserLevel(an) {
 function vadTick() {
   if (!AI.listening) return;
   const now = performance.now(), age = now - AI.recT0;
-  if (AI.mode !== "awake") { if (age > 1500) recCut(false); return; }   // asleep, thinking or talking: nothing is sent
+  if (AI.mode === "sleep") { if (age > 1500) recCut(false); return; }   // asleep: nothing is sent
+  const talking = AI.mode === "speaking";
   const lvl = analyserLevel(AI.micAn);
   AI.micLvl = lvl;
-  const loud = lvl > AI.floor * 2 + 0.006;
-  if (!loud) AI.floor = AI.floor * 0.97 + lvl * 0.03;                  // learns how quiet the room is
-  if (loud) { AI.speechMs += 50; AI.quietMs = 0; if (AI.speechMs > 220) AI.speech = true; }
+  // while he talks, his own voice can reach the microphone, so you have to be clearly louder than that to cut in
+  const echo = talking && AI.outAn ? analyserLevel(AI.outAn) : 0;
+  const loud = lvl > AI.floor * 2 + 0.006 + (talking ? 0.02 + echo * 0.6 : 0);
+  if (!loud && !talking) AI.floor = AI.floor * 0.97 + lvl * 0.03;      // learns how quiet the room is
+  if (loud) { AI.speechMs += 50; AI.quietMs = 0; if (AI.speechMs > (talking ? 320 : 220)) AI.speech = true; }
   else { AI.quietMs += 50; if (!AI.speech) AI.speechMs = Math.max(0, AI.speechMs - 25); }
+  if (talking) {
+    if (AI.speech) { try { AI.src && AI.src.stop(); } catch (e) {} aiMode("awake"); }   // you cut in: he stops and listens
+    else { if (age > 1500) recCut(false); return; }
+  }
   if (AI.speech && AI.quietMs > 650) return recCut(true);               // a sentence just ended: check it
   if (AI.speech && age > 12000) return recCut(true);                    // a long one: check what we have
   if (!AI.speech && age > 6000) recCut(false);                          // nothing said: start a fresh clip
@@ -2631,7 +2638,7 @@ async function handleClip(blob) {
   try { heard = String((await aiPost("/stt", blob, false)).text || "").trim(); }
   catch (e) { console.warn("listening:", e.message); if (/not set up|429|Too many/i.test(e.message)) aiNote(e.message); return; }
   if (!heard) return;
-  if (AI.mode !== "awake") return;
+  if (AI.mode === "sleep" || AI.mode === "speaking") return;
   if (AI.pending) return aiSpeak(aiConfirm(heard), "awake");
   const m = heard.match(WAKE);
   const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "");
@@ -2655,9 +2662,11 @@ function playBuffer(buf, after) {
   src.onended = () => { if (AI.src === src) AI.src = null; if (after) after(); };
   src.start();
 }
-async function aiSpeak(text, then) {
+async function aiSpeak(text, then, id) {
   try {
     const buf = await ttsBuffer(text);
+    if (id && id !== AI.req) return;                                    // you already asked something newer
+    if (AI.mode === "awake" && AI.speech) return;                       // you started talking: don't talk over you
     aiMode("speaking");
     playBuffer(buf, () => aiMode(then || "sleep"));
   } catch (e) { console.warn("voice:", e.message); aiNote(e.message); aiMode(then || "sleep"); }
@@ -2669,12 +2678,14 @@ function aiGreet() {
   else aiSpeak(GREETINGS[i], "awake");
 }
 async function aiAnswer(q) {
+  const id = AI.req = (AI.req || 0) + 1;                                // a newer question replaces an older one
   aiMode("thinking");
   try {
     const a = await aiPost("/ask", { question: q, context: aiContext() }, true);
+    if (id !== AI.req) return;
     const own = aiDo(a.action);
-    await aiSpeak(own || a.say || "Hmm, I'm not sure about that one.", "awake");
-  } catch (e) { console.warn("answer:", e.message); aiNote(e.message); aiMode("awake"); }
+    await aiSpeak(own || a.say || "Hmm, I'm not sure about that one.", "awake", id);
+  } catch (e) { if (id !== AI.req) return; console.warn("answer:", e.message); aiNote(e.message); aiMode("awake"); }
 }
 // what is on the table right now, in plain words, for Grok, plus the actions he may use
 function aiContext() {
@@ -2895,24 +2906,25 @@ voiceBtn.addEventListener("click", () => {
    Each finger bone is a short tube and each joint a small ball. Drawn in two steps: first only the shape
    (so overlapping fingers hide each other), then a dark see-through skin with a bright edge, like the Quest's own hands. */
 const GLOVE_SEGS = BONES.concat([[6, 11], [11, 16], [16, 21], [2, 6], [1, 5]]);    // finger bones plus across the palm
-const JR = [0.017, 0.013, 0.0112, 0.0102, 0.0092, 0.0125, 0.0102, 0.0094, 0.0088, 0.008, 0.0125, 0.0104, 0.0096, 0.009, 0.0082,
-            0.0122, 0.0098, 0.009, 0.0085, 0.0078, 0.0115, 0.009, 0.0083, 0.0078, 0.0072];
+const JR = [0.018, 0.014, 0.0122, 0.011, 0.0098, 0.013, 0.011, 0.0101, 0.0094, 0.0086, 0.013, 0.0112, 0.0103, 0.0096, 0.0088,
+            0.0127, 0.0106, 0.0097, 0.0091, 0.0084, 0.012, 0.0097, 0.009, 0.0084, 0.0078];
 const GL = { hands: [] }, GM = new THREE.Matrix4(), GQ = new THREE.Quaternion(), GS = new THREE.Vector3(), GP = new THREE.Vector3(),
       GD = new THREE.Vector3(), GUP = new THREE.Vector3(0, 1, 0);
 function gloveHand(i) {
   if (GL.hands[i]) return GL.hands[i];
   if (!GL.geoC) {
-    GL.geoC = new THREE.CylinderGeometry(1, 1, 1, 12, 1, true);
-    GL.geoS = new THREE.SphereGeometry(1, 14, 10);
+    GL.geoC = new THREE.CylinderGeometry(1, 1, 1, 20, 1, true);
+    GL.geoS = new THREE.SphereGeometry(1, 24, 16);
     GL.pre = new THREE.MeshBasicMaterial({ colorWrite: false });
-    GL.col = new THREE.MeshStandardMaterial({ color: 0x0c0e11, transparent: true, depthWrite: false, roughness: 1 });
+    GL.col = new THREE.MeshStandardMaterial({ color: 0x2a2d32, transparent: true, depthWrite: false, roughness: 1 });
     GL.col.onBeforeCompile = (sh) => {
       sh.fragmentShader = sh.fragmentShader.replace("#include <dithering_fragment>", [
         "#include <dithering_fragment>",
-        "float tmRim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.2);",
-        "gl_FragColor = vec4(mix(vec3(0.03, 0.035, 0.04), vec3(0.92, 0.95, 1.0), tmRim), mix(0.32, 0.95, tmRim));"].join("\n"));
+        "float tmRim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 3.0);",
+        "float tmTop = clamp(normalize(vNormal).y * 0.5 + 0.5, 0.0, 1.0);",
+        "gl_FragColor = vec4(mix(vec3(0.15, 0.16, 0.18), vec3(0.27, 0.29, 0.32), tmTop * 0.6 + tmRim * 0.25), 0.62 - tmRim * 0.22);"].join("\n"));
     };
-    GL.col.customProgramCacheKey = () => "tm-glove-joints";
+    GL.col.customProgramCacheKey = () => "tm-glove-joints-2";
   }
   const root = document.querySelector("a-scene").object3D, n = GLOVE_SEGS.length;
   const make = (geo, mat, count, order) => {
@@ -2920,7 +2932,7 @@ function gloveHand(i) {
     m.frustumCulled = false; m.renderOrder = order; m.visible = false; m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     root.add(m); return m;
   };
-  return (GL.hands[i] = { parts: [make(GL.geoC, GL.pre, n, 20), make(GL.geoC, GL.col, n, 21), make(GL.geoS, GL.pre, 25, 20), make(GL.geoS, GL.col, 25, 21)] });
+  return (GL.hands[i] = { parts: [make(GL.geoC, GL.pre, n, 20), make(GL.geoC, GL.col, n, 21), make(GL.geoS, GL.pre, 26, 20), make(GL.geoS, GL.col, 26, 21)] });
 }
 function drawGlove(i, joints) {
   if (S.handStyle !== "glove") return;
@@ -2930,6 +2942,15 @@ function drawGlove(i, joints) {
   if (!joints) return;
   const [cp, cc, sp, sc] = h.parts;
   for (let k = 0; k < 25; k++) { GM.compose(joints[k], GQ.identity(), GS.setScalar(JR[k])); sp.setMatrixAt(k, GM); sc.setMatrixAt(k, GM); }
+  // the palm: a flattened ball spanning wrist to knuckles, index to little finger
+  const W = joints[0], I = joints[6], P = joints[21];
+  GP.addVectors(I, P).multiplyScalar(0.5);                              // middle of the knuckles
+  const ax = GD.subVectors(P, I), width = ax.length() || 0.07; ax.normalize();
+  const ay = GS.subVectors(GP, W), length = ay.length() || 0.08; ay.normalize();
+  const az = new THREE.Vector3().crossVectors(ax, ay).normalize();
+  const c = GP.clone().add(W).multiplyScalar(0.5);
+  GM.makeBasis(ax.multiplyScalar(width * 0.62), ay.multiplyScalar(length * 0.62), az.multiplyScalar(0.0125)).setPosition(c);
+  sp.setMatrixAt(25, GM); sc.setMatrixAt(25, GM);
   GLOVE_SEGS.forEach(([a, b], k) => {
     const A = joints[a], B = joints[b];
     GD.subVectors(B, A);
