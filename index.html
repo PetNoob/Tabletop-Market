@@ -111,7 +111,7 @@ const SETTINGS = {
   oddsAnim: true,       // numbers slide up or down and flash green or red when the odds change
   assistant: true,
   grokDebug: true,
-  grokPauseMs: 1200,    // how long a silence means you finished your sentence (ms); longer = patient with slow talkers
+  grokPauseMs: 650,    // how long a silence means you finished your sentence (ms); longer = patient with slow talkers
   grokInterrupt: false, // true = you can cut Grok off while he talks; false = he finishes first (the older behaviour)      // testing aid: a small note under Grok shows what he heard and any problem. Set false for the demo     // the talking orb (needs serverUrl, with Grok and ElevenLabs keys on the server)
   icons: true,          // show Gemini's market pictures (needs serverUrl, which passes them through)
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
@@ -4753,7 +4753,7 @@ function vadTick() {
     if (AI.speech) { aiHush(); aiMode("awake"); }                       // you cut in: he stops and listens
     else { if (age > 1500 && AI.speechMs === 0) recCut(false); return; }   // only start a fresh clip when nobody is mid-word
   }
-  if (AI.speech && (AI.quietMs > (S.grokPauseMs || 1200) || age > 15000)) {                // a sentence just ended (or a long one): check it
+  if (AI.speech && (AI.quietMs > (S.grokPauseMs || 650) || age > 15000)) {                // a sentence just ended (or a long one): check it
     AI.t0 = now;                                                          // for the timing note
     if (AI.mode === "awake") { aiMode("thinking"); AI.req = (AI.req || 0) + 1; }   // show right away that he caught it
     return recCut(true);
@@ -4799,7 +4799,7 @@ function playBuffer(buf, after) {
   AI.src = src;
   src.onended = () => {
     if (AI.src === src) AI.src = null;
-    AI.deafUntil = performance.now() + 700; AI.freshClip = true;        // don't hear the tail of his own voice
+    listenNow();
     if (after) after();
   };
   src.start();
@@ -4813,11 +4813,17 @@ function aiVoiceEl() {
   try { AI.elSrc = aiAudio().createMediaElementSource(a); AI.elSrc.connect(AI.outAn); } catch (e) { console.warn("voice meter:", e); }
   return a;
 }
+// his voice just ended: start listening right away. A fresh recording starts now and is kept, so a reply that begins
+// the instant he stops is caught; for the first 0.25 s loudness is not judged (the tail of his own voice), but it is recorded
+function listenNow() {
+  AI.deafUntil = performance.now() + 250; AI.freshClip = false;
+  if (AI.listening && AI.rec) { try { recCut(false); } catch (e) {} }
+}
 function aiVoiceDone() {
   const a = AI.el;
   if (a) { a.onended = a.onerror = a.onplaying = null; }
   AI.elPlaying = false;
-  AI.deafUntil = performance.now() + 700; AI.freshClip = true;        // don't hear the tail of his own voice
+  listenNow();
 }
 // stop him talking, whichever way the sound is playing
 function aiHush() {
