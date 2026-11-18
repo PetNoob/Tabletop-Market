@@ -1006,9 +1006,9 @@ function build() {
   UI.interest = label(bal, `Earning ${S.interestRate}% while idle (preview)`, 0, -0.027, 0.006, 0.0052, C.acc);
   UI.arcLine = label(bal, "", 0, -0.058, 0.006, 0.0048, C.dim);
   UI.addBtn = button(bal, "+ Add", -0.048, -0.084, 0.09, 0.026, () => openAdd("add"),
-                     { size: 0.0062, r: 0.013, color: C.acc, ink: C.accInk, enabled: () => !LIVE.on && !ADD.open });
+                     { size: 0.0062, r: 0.013, color: C.acc, ink: C.accInk, enabled: () => !ADD.open });
   UI.outBtn = button(bal, "Withdraw", 0.048, -0.084, 0.09, 0.026, () => openAdd("out"),
-                     { size: 0.0062, r: 0.013, color: FIELD, enabled: () => !LIVE.on && !ADD.open && state.balance >= 1 });
+                     { size: 0.0062, r: 0.013, color: FIELD, enabled: () => !ADD.open });
 
   // handle to move everything (always there)
   UI.handle = slab(market, 0.16, 0.02, 0.014, C.handle, { r: 0.007, pos: "0 0.008 0.25", rot: "-90 0 0", cls: "clickable" });
@@ -2483,7 +2483,6 @@ function refresh() {
     UI.game.setAttribute("visible", inMarket());
   }
   UI.balance.setAttribute("value", money(state.balance));
-  if (UI.addBtn) UI.addBtn.el.object3D.visible = UI.outBtn.el.object3D.visible = !LIVE.on;
   if (inMarket()) refreshMarket(); else refreshLobby();
   refreshPanel();
   // hidden buttons must not catch mouse or pointer presses meant for what is behind them
@@ -2878,10 +2877,10 @@ function buildAddMoney(market) {
   UI.addPay = button(B, "", 0.11, -0.012, 0.2, 0.04, addPay, { enabled: onB, r: 0.02, color: C.acc, ink: C.accInk, size: 0.0095 });
   button(B, "Back", 0.11, -0.06, 0.1, 0.03, () => { ADD.step = "amount"; lockFingers(); refreshAdd(); refresh(); },
          { enabled: onB, r: 0.015, color: FIELD, size: 0.0064 });
-  label(B, "Test mode: no real money moves", -0.125, -0.073, 0.006, 0.0052, C.dim);
+  UI.addFoot = label(B, "", -0.125, -0.073, 0.006, 0.0052, C.dim);
 }
 function openAdd(mode) {
-  if (LIVE.on || ADD.open) return;
+  if (ADD.open) return;
   if (state.sel !== null) closePanel();
   const out = mode === "out";
   Object.assign(ADD, { open: true, mode: out ? "out" : "add", step: "amount", typed: "", busy: false,
@@ -2896,7 +2895,7 @@ function closeAdd() {
   lockFingers(); refresh();
 }
 function addSet(v, keepTyped) {
-  ADD.amount = Math.round(clamp(v, 0, ADD.mode === "out" ? state.balance : 1000) * 100) / 100;
+  ADD.amount = Math.round(clamp(v, 0, 100000) * 100) / 100;
   if (!keepTyped) ADD.typed = "";
   refreshAdd(); refresh();
 }
@@ -2914,6 +2913,7 @@ function addContinue() {
 }
 function addPay() {
   if (ADD.busy || ADD.step !== "card") return;
+  if (LIVE.on) { closeAdd(); return; }              // real money: nothing is moved here (it is done in the Gemini app)
   ADD.busy = true; refreshAdd(); refresh();
   setTimeout(() => {
     if (!ADD.open) return;
@@ -2936,14 +2936,27 @@ function refreshAdd() {
   UI.addB.object3D.visible = ADD.step !== "amount";
   UI.addTitleA.setAttribute("value", out ? "Withdraw" : "Add money");
   UI.addAmt.setAttribute("value", ADD.typed !== "" ? "$" + ADD.typed : amt);
-  UI.addNote.setAttribute("value", out ? "Available " + money(state.balance) : "Ready to use in seconds");
+  const short = out && ADD.amount > state.balance;
+  UI.addNote.setAttribute("value", short ? "Insufficient balance (available " + money(state.balance) + ")" :
+                                   out ? "Available " + money(state.balance) : LIVE.on ? "Into your Gemini account" : "Ready to use in seconds");
+  UI.addNote.setAttribute("color", short ? C.red : C.acc);
   UI.addAll.t.setAttribute("value", out ? "All" : "Clear");
+  if (LIVE.on) {                                     // real money: say plainly where it moves
+    UI.addTitleB.setAttribute("value", out ? "Withdraw on Gemini" : "Deposit on Gemini");
+    ["Gemini account", "REAL MONEY", "Done in the Gemini app", "gemini.com"].forEach((s, i) => UI.addCard[i].setAttribute("value", s));
+    UI.addTotal.setAttribute("value", (out ? "Withdraw " : "Deposit ") + amt);
+    UI.addSub.setAttribute("value", out ? "Withdraw in the Gemini app" : "Deposit in the Gemini app");
+    UI.addPay.t.setAttribute("value", "Got it");
+    UI.addFoot.setAttribute("value", "The table shows your real Gemini balance");
+    return;
+  }
   UI.addTitleB.setAttribute("value", out ? "Send to bank" : "Pay with card");
   (out ? ["Bank account", "TEST BANK", "Checking  ****  6789", "Instant transfer"]
        : ["Debit card", "TEST CARD", "****  ****  ****  4242", "Exp 12/30"]).forEach((s, i) => UI.addCard[i].setAttribute("value", s));
   UI.addTotal.setAttribute("value", ADD.step === "done" ? (out ? "Sent " : "Added ") + amt : (out ? "Withdraw " : "Add ") + amt);
   UI.addSub.setAttribute("value", ADD.step === "done" ? (out ? "On its way to your bank" : "Ready to use now") : (out ? "Lands in seconds, not days" : "Arrives in seconds"));
   UI.addPay.t.setAttribute("value", ADD.busy ? "Processing..." : ADD.step === "done" ? "Done" : (out ? "Withdraw " : "Pay ") + amt);
+  UI.addFoot.setAttribute("value", "Test mode: no real money moves");
 }
 
 /* ---------- hooks used by the headset input code ---------- */
