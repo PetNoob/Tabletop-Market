@@ -1881,17 +1881,20 @@ function courtShow(kind, cols, coin) {
   };
   if (!kind) {
     ballShow(""); vaultShow("");
-    tween("court", 380, (k) => { const a = 1 - easeOut(k); FLOOR.u.value = a; if (was === "basketball") setHoops(a, 0); },
-          () => { FLOOR.mesh.visible = false; UI.hoops.setAttribute("visible", false); });
+    tween("court", 380, (k) => { const a = 1 - easeOut(k); FLOOR.u.value = a; if (was === "basketball") setHoops(a, 0);
+                                 if (NETS.grp) NETS.grp.scale.set(1, Math.max(0.0001, a), 1); },
+          () => { FLOOR.mesh.visible = false; UI.hoops.setAttribute("visible", false); netsShow(""); });
     return;
   }
   FLOOR.mat.map = floorTex(kind, kind === "crypto" ? null : cols);
   FLOOR.u.value = 0; FLOOR.mesh.visible = true;
   UI.hoops.setAttribute("visible", kind === "basketball");
+  netsShow(kind, cols);
   if (kind === "basketball") setHoops(0.0001, 0);
   tween("court", 900, (k) => {
     FLOOR.u.value = easeOut(span(k, 0.05, 0.65));
     if (kind === "basketball") setHoops(easeBack(span(k, 0.45, 1)), 1.2 * Math.sin(Math.PI * span(k, 0.7, 1)));
+    if (NETS.grp) NETS.grp.scale.set(1, Math.max(0.0001, easeBack(span(k, 0.45, 1))), 1);   // the goals rise too
   }, () => (kind === "crypto" ? vaultShow(coin) : ballShow(kind)));
 }
 function backToLobby() {
@@ -3370,7 +3373,9 @@ function stepBall(now) {
       }
     }
     if (B.puck || B.p.y <= fy + 0.0005) { const f = Math.max(0, 1 - dt * (B.puck ? 0.35 : 1.1)); B.v.x *= f; B.v.z *= f; }
-    if (Math.abs(B.p.x) > COURT_XB - B.r) { B.p.x = Math.sign(B.p.x) * (COURT_XB - B.r); B.v.x = -B.v.x * 0.72; }   // invisible walls
+    const xl = wallLimitX(B);                                                             // past the edge only into a goal
+    if (Math.abs(B.p.x) > xl) { B.p.x = Math.sign(B.p.x) * xl; B.v.x = -B.v.x * 0.72; }   // invisible walls
+    netCatch(B);
     if (Math.abs(B.p.z) > COURT_ZB - B.r) { B.p.z = Math.sign(B.p.z) * (COURT_ZB - B.r); B.v.z = -B.v.z * 0.72; }
     if (B.p.y > 0.4) { B.p.y = 0.4; B.v.y = -Math.abs(B.v.y) * 0.5; }
   }
@@ -3379,6 +3384,7 @@ function stepBall(now) {
   if (B.puck) { B.spinGrp.rotation.y += B.wy * dt0; B.wy *= Math.max(0, 1 - dt0 * 0.9); }
   else if (sp > 0.001) { baxis.set(B.v.z, 0, -B.v.x).normalize(); bq.setFromAxisAngle(baxis, sp / B.r * dt0); B.spinGrp.quaternion.premultiply(bq); }
   B.el.object3D.position.copy(B.p);
+  stepNets(dt0);
 }
 
 /* ---------- crypto markets: a vault full of coins ----------
@@ -3487,10 +3493,11 @@ function buildVault() {
   // a warm glow from the coins inside
   const glow = new THREE.Mesh(new THREE.PlaneGeometry(W * 0.7, H * 0.55),
     new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending }));
-  glow.position.set(0, -H * 0.12, -D / 2 + t + 0.004); root.add(glow);
+  glow.position.set(0, -H * 0.05, -D / 2 + t + 0.004); glow.scale.set(1.15, 1.4, 1); glow.material.opacity = 0.55; root.add(glow);
   // the door, hinged on the left edge, swung open a little, with a wheel and bolts
   const dw = W - 2 * t * 1.1, dh = H - 2 * t * 1.1, door = V.door = new THREE.Group();
   door.position.set(-W / 2 + t, 0, D / 2 + 0.004); door.rotation.y = -0.62; root.add(door);
+  V.dw = dw; V.dh = dh; V.th = -0.62; V.om = 0;                                        // hinge angle (0 = shut) and its speed
   const slab2 = new THREE.Mesh(new THREE.BoxGeometry(dw, dh, 0.009), steel); slab2.position.x = dw / 2; door.add(slab2);
   const brass = new THREE.MeshStandardMaterial({ color: 0xc9a227, metalness: 0.9, roughness: 0.25 });
   const wheel = new THREE.Mesh(new THREE.TorusGeometry(0.013, 0.0018, 8, 24), brass); wheel.position.set(dw / 2, 0, 0.0065); door.add(wheel);
@@ -3501,12 +3508,22 @@ function buildVault() {
   });
   // a heap of coins inside (fixed), and the loose coins on the board (moving)
   const geo = new THREE.CylinderGeometry(COIN_R, COIN_R, COIN_H, 24);
-  V.heap = new THREE.InstancedMesh(geo, coinMats("coin"), 34); root.add(V.heap);
+  // a big heap: piled high at the back, sloping down to the door, a few spilled over the lip onto the board
+  const HEAP = 170, IN_W = W - 2 * t - COIN_R * 2, z0 = -D / 2 + t + COIN_R, z1 = D / 2 - COIN_R;
+  V.heap = new THREE.InstancedMesh(geo, coinMats("coin"), HEAP); root.add(V.heap);
   const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(), P = new THREE.Vector3(), Sc = new THREE.Vector3(1, 1, 1), rnd = seeded(5);
-  for (let i = 0; i < 34; i++) {
-    const layer = Math.floor(i / 12), a = rnd() * Math.PI * 2, r = rnd() * (0.026 - layer * 0.007);
-    P.set(Math.cos(a) * r, -H / 2 + t + COIN_H / 2 + layer * 0.004 + rnd() * 0.002, -0.004 + Math.sin(a) * r * 0.8);
-    Q.setFromEuler(E.set((rnd() - 0.5) * 0.7, rnd() * 6.3, (rnd() - 0.5) * 0.7));
+  for (let i = 0; i < HEAP; i++) {
+    let x, y, z;
+    if (i < HEAP - 10) {
+      x = (rnd() - 0.5) * IN_W; z = z0 + rnd() * (z1 - z0);
+      const back = 1 - (z - z0) / (z1 - z0), side = 1 - Math.pow(x / (IN_W / 2), 2) * 0.35;
+      const top = (H - 2 * t) * (0.25 + 0.6 * back) * side;                            // height of the heap here
+      y = -H / 2 + t + COIN_H / 2 + top * (0.55 + 0.45 * Math.sqrt(rnd()));
+    } else {                                                                              // spilled over the lip
+      x = (rnd() - 0.5) * W * 0.8; z = D / 2 + 0.006 + rnd() * 0.02; y = -H / 2 + COIN_H / 2 + rnd() * 0.002;
+    }
+    P.set(x, y, z);
+    Q.setFromEuler(E.set((rnd() - 0.5) * 0.9, rnd() * 6.3, (rnd() - 0.5) * 0.9));
     V.heap.setMatrixAt(i, M.compose(P, Q, Sc));
   }
   V.inst = new THREE.InstancedMesh(geo, coinMats("coin"), COIN_CAP); V.inst.count = 0; V.inst.frustumCulled = false;
@@ -3520,7 +3537,8 @@ function vaultShow(coin) {
   V.coin = coin; V.on = true;
   V.heap.material = V.inst.material = coinMats(coin);
   V.root.visible = true;
-  tween("vault", 520, (k) => { const s = Math.max(0.001, easeBack(k)); V.root.scale.setScalar(s); V.door.rotation.y = -0.62 * easeOut(k); },
+  V.th = -0.62; V.om = 0; V.door.rotation.y = 0;
+  tween("vault", 520, (k) => { const s = Math.max(0.001, easeBack(k)); V.root.scale.setScalar(s); V.th = -0.62 * easeOut(k); V.door.rotation.y = V.th; },
         () => { for (let i = 0; i < 14; i++) setTimeout(() => spillCoin(1.2), i * 45); });   // a small spill to show what it does
 }
 // one coin out of the door, toward you, with a bit of spin
@@ -3530,36 +3548,45 @@ function spillCoin(power) {
   let c;
   if (V.coins.length < COIN_CAP) { c = { p: new THREE.Vector3(), v: new THREE.Vector3(), q: new THREE.Quaternion(), w: new THREE.Vector3(), rest: false }; V.coins.push(c); }
   else { c = V.coins.shift(); V.coins.push(c); c.rest = false; }                             // recycle the oldest
-  const p = power || 1;
+  const p = (power || 1) * 0.85;
   c.p.set((Math.random() - 0.5) * V.W * 0.5, FLOOR_Y + 0.012 + Math.random() * 0.03, V.Z + V.D / 2 + COIN_R + 0.004);
   c.v.set((Math.random() - 0.5) * 0.5 * p, (0.15 + Math.random() * 0.35) * p, (0.25 + Math.random() * 0.45) * p);
   c.q.setFromEuler(new THREE.Euler(Math.random() * 6.3, Math.random() * 6.3, Math.random() * 6.3));
   c.w.set((Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30, (Math.random() - 0.5) * 30);
 }
-const cv1 = new THREE.Vector3(), cq1 = new THREE.Quaternion(), cq2 = new THREE.Quaternion(), cup = new THREE.Vector3(), cM = new THREE.Matrix4(), cS = new THREE.Vector3(1, 1, 1), YUP = new THREE.Vector3(0, 1, 0);
+const cq2v = new THREE.Vector3(), cv1 = new THREE.Vector3(), cq1 = new THREE.Quaternion(), cq2 = new THREE.Quaternion(), cup = new THREE.Vector3(), cM = new THREE.Matrix4(), cS = new THREE.Vector3(1, 1, 1), YUP = new THREE.Vector3(0, 1, 0);
 function stepVault(now) {
   const V = VAULT, dt0 = Math.min(0.05, Math.max(0.001, (now - (V.last || now)) / 1000));
   V.last = now;
   if (!V.on || !inMarket()) return;
+  // the heavy door: the table's movement swings it slowly; hinge friction; it thuds to a stop shut or wide open
+  if (!ANIMS.some((a) => a.name === "vault")) {
+    V.om += (-(phys.acc.x * 0.55 + phys.acc.z * 0.3) - (V.th + 0.62) * 0.8 - V.om * 1.6) * dt0;
+    V.th += V.om * dt0;
+    if (V.th > -0.03) { V.th = -0.03; V.om = -V.om * 0.2; }
+    if (V.th < -1.75) { V.th = -1.75; V.om = -V.om * 0.2; }
+    V.door.rotation.y = V.th;
+  }
+  const doorOpen = clamp((-V.th - 0.08) / 0.45, 0, 1);                                   // a shut door lets nothing out
   // shaking spills coins: the harder the table is moved, the more come out
   const shake = Math.hypot(phys.acc.x, phys.acc.z) + Math.abs(phys.acc.y) * 0.5;
-  if (shake > 1.1) { V.spillDebt += (shake - 1.1) * 7 * dt0; V.lastShake = now; }
+  if (shake > 1.1) { V.spillDebt += (shake - 1.1) * 7 * dt0 * doorOpen; V.lastShake = now; }
   while (V.spillDebt >= 1) { V.spillDebt -= 1; spillCoin(0.8 + Math.min(1.2, shake / 6)); }
   const steps = Math.ceil(dt0 / 0.01), dt = dt0 / steps, fy = FLOOR_Y + COIN_H / 2;
   const vx0 = -V.W / 2 - COIN_R, vx1 = V.W / 2 + COIN_R, vz0 = V.Z - V.D / 2 - COIN_R, vz1 = V.Z + V.D / 2 + COIN_R, vy1 = FLOOR_Y + V.H + COIN_R;
   V.coins.forEach((c, i) => {
-    if (c.rest && shake > 1.4) { c.rest = false; c.v.y += 0.05 + Math.random() * 0.1; }   // a shake wakes resting coins
+    if (c.rest && shake > 1.8) { c.rest = false; c.v.y += 0.03 + Math.random() * 0.06; }   // a hard shake wakes resting coins
     if (c.rest) return;
     for (let s = 0; s < steps; s++) {
-      c.v.y += BALL_G * dt;
-      c.v.x -= phys.acc.x * dt * 0.6; c.v.z -= phys.acc.z * dt * 0.6;
+      c.v.y += BALL_G * 1.5 * dt;                                                           // heavier than the ball
+      c.v.x -= phys.acc.x * dt * 0.4; c.v.z -= phys.acc.z * dt * 0.4;
       c.p.addScaledVector(c.v, dt);
       const ground = fy + (i % 7) * 0.00012;                                                 // tiny offsets so flat coins never flicker
       if (c.p.y < ground) {
         c.p.y = ground;
-        if (c.v.y < 0) c.v.y = -c.v.y * 0.32;
-        if (c.v.y < 0.05) c.v.y = 0;
-        const f = Math.max(0, 1 - dt * 3.2); c.v.x *= f; c.v.z *= f; c.w.multiplyScalar(Math.max(0, 1 - dt * 6));
+        if (c.v.y < 0) c.v.y = -c.v.y * 0.2;
+        if (c.v.y < 0.06) c.v.y = 0;
+        const f = Math.max(0, 1 - dt * 4.2); c.v.x *= f; c.v.z *= f; c.w.multiplyScalar(Math.max(0, 1 - dt * 6));
       }
       if (Math.abs(c.p.x) > COURT_XB - COIN_R) { c.p.x = Math.sign(c.p.x) * (COURT_XB - COIN_R); c.v.x = -c.v.x * 0.5; }
       if (Math.abs(c.p.z) > COURT_ZB - COIN_R) { c.p.z = Math.sign(c.p.z) * (COURT_ZB - COIN_R); c.v.z = -c.v.z * 0.5; }
@@ -3589,7 +3616,7 @@ function vaultTouch(i, joints) {
   const V = VAULT;
   if (!V.on || !joints || !inMarket()) return;
   const mkt = document.getElementById("market").object3D, now = performance.now();
-  const mem = V.hands[i] || (V.hands[i] = { prev: {}, t: now, poke: 0 });
+  const mem = V.hands[i] || (V.hands[i] = { prev: {}, dprev: {}, t: now, poke: 0 });
   const dt = (now - mem.t) / 1000;
   for (const k of GRAB_PTS) {
     const lp = mkt.worldToLocal(cv1.copy(joints[k]));
@@ -3599,10 +3626,16 @@ function vaultTouch(i, joints) {
       const dx = c.p.x - lp.x, dy = c.p.y - lp.y, dz = c.p.z - lp.z, d2 = dx * dx + dy * dy + dz * dz;
       if (d2 > 0.0004) continue;                                                             // within 2 cm
       const d = Math.sqrt(d2) || 0.001;
-      c.v.set(vx * 0.9 + dx / d * 0.3, Math.max(0.1, vy * 0.6 + 0.15), vz * 0.9 + dz / d * 0.3);
+      c.v.set(vx * 0.6 + dx / d * 0.22, Math.max(0.06, vy * 0.4 + 0.1), vz * 0.6 + dz / d * 0.22);
       c.w.set((Math.random() - 0.5) * 25, (Math.random() - 0.5) * 25, (Math.random() - 0.5) * 25);
       c.rest = false;
     }
+    // a hand on the door pushes it shut or pulls it open (it is heavy, so it takes a firm push)
+    const dl = V.door.worldToLocal(cq2v.copy(joints[k])), dp = mem.dprev[k] || (mem.dprev[k] = dl.clone());
+    if (dl.x > 0 && dl.x < V.dw && Math.abs(dl.y) < V.dh / 2 && Math.abs(dl.z) < 0.014 && dt > 0 && dt < 0.1) {
+      V.om = clamp(V.om - (dl.z - dp.z) / dt * 7 * (dl.x / V.dw), -5, 5);
+    }
+    dp.copy(dl);
     if (Math.abs(lp.x) < V.W / 2 + 0.01 && lp.y < FLOOR_Y + V.H + 0.01 && lp.z > V.Z - V.D / 2 - 0.01 && lp.z < V.Z + V.D / 2 + 0.01 && now > mem.poke) {
       mem.poke = now + 250;
       for (let n = 0; n < 4; n++) spillCoin(1.1);                                            // a poke at the vault knocks a few out
@@ -3610,6 +3643,84 @@ function vaultTouch(i, joints) {
     prev.copy(lp);
   }
   mem.t = now;
+}
+
+/* ---------- soccer and hockey goals: real 3D nets in each team's color (away left, home right) ----------
+   They rise up when the market opens, like the basketball hoops. The ball or puck can go in: the net catches it,
+   slows it down and ripples. */
+const NETS = { grp: null, goals: [] };
+let NET_TEX = null;
+const GOAL_SIZE = { soccer: { w: 0.066, h: 0.03, d: 0.024, x: 0.249, post: 0xf4f6f8, r: 0.0013 },
+                    hockey: { w: 0.048, h: 0.026, d: 0.02, x: 0.226, post: 0xd0202b, r: 0.0012 } };
+function netTex() {
+  if (NET_TEX) return NET_TEX;
+  const cv = document.createElement("canvas"); cv.width = cv.height = 64;
+  const g = cv.getContext("2d");
+  g.strokeStyle = "rgba(255,255,255,1)"; g.lineWidth = 3;
+  for (let k = 0; k <= 64; k += 16) { g.beginPath(); g.moveTo(k, 0); g.lineTo(k, 64); g.stroke(); g.beginPath(); g.moveTo(0, k); g.lineTo(64, k); g.stroke(); }
+  NET_TEX = new THREE.CanvasTexture(cv);
+  NET_TEX.wrapS = NET_TEX.wrapT = THREE.RepeatWrapping; NET_TEX.repeat.set(6, 3);
+  return NET_TEX;
+}
+function buildGoal(kind, dir, color) {
+  const G = GOAL_SIZE[kind], grp = new THREE.Group();
+  grp.position.set(dir * G.x, FLOOR_Y, 0);
+  const pm = new THREE.MeshStandardMaterial({ color: G.post, metalness: 0.35, roughness: 0.4 });
+  const bar = (len, x, y, z, along) => {
+    const c = new THREE.Mesh(new THREE.CylinderGeometry(G.r, G.r, len, 10), pm);
+    c.position.set(x, y, z);
+    if (along === "z") c.rotation.x = Math.PI / 2; else if (along === "x") c.rotation.z = Math.PI / 2;
+    grp.add(c);
+  };
+  bar(G.h, 0, G.h / 2, -G.w / 2); bar(G.h, 0, G.h / 2, G.w / 2);                     // posts
+  bar(G.w, 0, G.h, 0, "z");                                                            // crossbar
+  bar(G.d, dir * G.d / 2, 0.0009, -G.w / 2, "x"); bar(G.d, dir * G.d / 2, 0.0009, G.w / 2, "x");   // frame along the ground
+  bar(G.w, dir * G.d, 0.0009, 0, "z");
+  bar(G.d, dir * G.d / 2, G.h, -G.w / 2, "x"); bar(G.d, dir * G.d / 2, G.h, G.w / 2, "x");          // top of the net frame
+  const nm = new THREE.MeshBasicMaterial({ color: color || "#ffffff", map: netTex(), transparent: true, opacity: 0.95,
+                                           side: THREE.DoubleSide, depthWrite: false, alphaTest: 0.08 });
+  const net = new THREE.Group(); grp.add(net);
+  const plane = (w, h, x, y, z, rx, ry) => { const p = new THREE.Mesh(new THREE.PlaneGeometry(w, h), nm); p.position.set(x, y, z); p.rotation.set(rx || 0, ry || 0, 0); p.renderOrder = 3; net.add(p); };
+  plane(G.w, G.h, dir * G.d, G.h / 2, 0, 0, Math.PI / 2);                              // back
+  plane(G.d, G.h, dir * G.d / 2, G.h / 2, -G.w / 2);                                   // sides
+  plane(G.d, G.h, dir * G.d / 2, G.h / 2, G.w / 2);
+  plane(G.d, G.w, dir * G.d / 2, G.h, 0, Math.PI / 2);                                 // roof
+  grp.userData = { G, dir, net, wob: 0, wobV: 0 };
+  return grp;
+}
+function netsShow(kind, cols) {
+  if (NETS.grp) { NETS.grp.parent && NETS.grp.parent.remove(NETS.grp); NETS.grp = null; }
+  NETS.goals = [];
+  if (!GOAL_SIZE[kind]) return;
+  NETS.grp = new THREE.Group(); NETS.grp.scale.set(1, 0.0001, 1);
+  UI.game.object3D.add(NETS.grp);
+  [-1, 1].forEach((dir, side) => { const gl = buildGoal(kind, dir, cols ? cols[side] : null); NETS.grp.add(gl); NETS.goals.push(gl); });
+}
+// the ball or puck inside a goal: the net slows it, stops it at the back and ripples
+function netCatch(B) {
+  for (const gl of NETS.goals) {
+    const { G, dir } = gl.userData;
+    if (Math.abs(B.p.z) > G.w / 2 - B.r * 0.5 || B.p.y > FLOOR_Y + G.h || dir * B.p.x < G.x) continue;
+    B.v.multiplyScalar(0.985);
+    if (dir * B.p.x > G.x + G.d - B.r) { B.p.x = dir * (G.x + G.d - B.r); if (dir * B.v.x > 0) { gl.userData.wobV += Math.min(4, Math.abs(B.v.x) * 6); B.v.x = -B.v.x * 0.15; } }
+    if (Math.abs(B.p.z) > G.w / 2 - B.r) { B.p.z = Math.sign(B.p.z) * (G.w / 2 - B.r); B.v.z = -B.v.z * 0.2; }
+  }
+}
+// how far out the ball may go on its side: past the court's edge only into a goal's mouth
+function wallLimitX(B) {
+  let xl = COURT_XB - B.r;
+  for (const gl of NETS.goals) {
+    const { G, dir } = gl.userData;
+    if (Math.sign(B.p.x) === dir && Math.abs(B.p.z) < G.w / 2 - B.r * 0.5 && B.p.y < FLOOR_Y + G.h) xl = Math.max(xl, G.x + G.d - B.r);
+  }
+  return xl;
+}
+function stepNets(dt) {
+  for (const gl of NETS.goals) {
+    const u = gl.userData;
+    u.wobV += (-u.wob * 140 - u.wobV * 9) * dt; u.wob += u.wobV * dt;
+    u.net.scale.x = 1 + u.wob * 0.25;
+  }
 }
 
 /* ---------- hooks used by the headset input code ---------- */
