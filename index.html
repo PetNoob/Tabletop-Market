@@ -4417,13 +4417,15 @@ function stepRecall(now) {
   if (now - RECALL.far > 1200) { RECALL.far = 0; recallDashboard(); }
 }
 
-/* ---------- "hi Grok": raise an open hand toward him to wake him from anywhere ----------
-   Hand above shoulder height, fingers spread (tips far from the wrist), palm turned toward Grok (or the back of the
-   hand: either side counts), held for about half a second. He wakes with his startled hop and a greeting. */
+/* ---------- "hi Grok": wave at him to wake him from anywhere ----------
+   Hand up around head height, fingers spread (tips far from the wrist), palm or back of the hand toward Grok, and a real
+   wave: the hand swings side to side (at least 4 cm each way, two changes of direction within 1.5 s). A hand that is
+   only held up while you talk does not count. He wakes with his startled hop and a greeting. */
 const WAVE = [];
+const WAVE_SWING = 0.04, WAVE_TURNS = 2, WAVE_MS = 1500;
 const wv1 = new THREE.Vector3(), wv2 = new THREE.Vector3(), wv3 = new THREE.Vector3(), wv4 = new THREE.Vector3();
 function grokWave(i, joints) {
-  if (!UI.orbAt || !joints || AI.mode !== "sleep") { WAVE[i] = 0; return; }
+  if (!UI.orbAt || !joints || AI.mode !== "sleep") { WAVE[i] = null; return; }
   const now = performance.now(), h = headPose();
   if (!h) return;
   const L = Math.max(0.05, joints[0].distanceTo(joints[10]));
@@ -4432,10 +4434,19 @@ function grokWave(i, joints) {
   const n = wv1.crossVectors(wv2.subVectors(joints[5], joints[0]), wv3.subVectors(joints[20], joints[0])).normalize();   // palm normal
   const toGrok = wv4.subVectors(UI.orbAt.object3D.position, joints[10]).normalize();
   const facing = Math.abs(n.dot(toGrok)) > 0.6;
-  if (open > 1.75 && raised && facing) {
-    if (!WAVE[i]) WAVE[i] = now;
-    if (now - WAVE[i] > 550) { WAVE[i] = 0; grokPat(wv2.set(0, 0.4, 0), 0.4); }        // the same wake-up as a pat
-  } else WAVE[i] = 0;
+  if (!(open > 1.75 && raised && facing)) { WAVE[i] = null; return; }
+  // how far the hand is to your left or right (along your head's sideways direction)
+  const x = joints[10].x * Math.cos(h.yaw) - joints[10].z * Math.sin(h.yaw);
+  let w = WAVE[i];
+  if (!w) w = WAVE[i] = { ext: x, dir: 0, turns: 0, t: now };
+  if (w.turns && now - w.t > WAVE_MS) { w.turns = 0; w.dir = 0; w.ext = x; }          // too slow: start counting again
+  if (w.dir === 0) { if (Math.abs(x - w.ext) > WAVE_SWING) { w.dir = Math.sign(x - w.ext); w.ext = x; } }
+  else if ((x - w.ext) * w.dir > 0) w.ext = x;                                          // still swinging the same way
+  else if (Math.abs(x - w.ext) > WAVE_SWING) {                                          // swung back: one change of direction
+    w.dir = -w.dir; w.ext = x;
+    if (!w.turns) w.t = now;
+    if (++w.turns >= WAVE_TURNS) { WAVE[i] = null; grokPat(wv2.set(0, 0.4, 0), 0.4); }  // the same wake-up as a pat
+  }
 }
 
 /* ---------- hooks used by the headset input code ---------- */
