@@ -4379,6 +4379,31 @@ function mpFallback() {
   }, 1200);
 }
 
+/* ---------- come here: bring the dashboard back in front of you ----------
+   If you walk more than about 1.8 m away from it (and Follow is off) it glides back in front of you after a moment;
+   saying "come here" to Grok calls it from any distance. It travels on the same spring, a little softer for the trip. */
+const RECALL = { far: 0, until: 0 };
+function recallDashboard() {
+  const h = headPose();
+  if (!h) return;
+  const fwd = new THREE.Vector3(0, 0, -1).applyAxisAngle(YAXIS, h.yaw);
+  phys.target.copy(h.pos).addScaledVector(fwd, S.distance);
+  phys.target.y = S.tableHeight;
+  phys.targetYaw = Math.atan2(h.pos.x - phys.target.x, h.pos.z - phys.target.z);       // facing you, like a drag leaves it
+  if (!FOLLOW.on) { phys.K = 120; phys.D = 17; RECALL.until = performance.now() + 1800; }   // a softer spring for the trip
+  sfx("whoosh", 0.5);
+}
+function stepRecall(now) {
+  if (RECALL.until && now > RECALL.until) { RECALL.until = 0; if (!FOLLOW.on) { phys.K = 0; phys.D = 0; } }
+  if (FOLLOW.on || FOLLOW.dragging || SIZE.on) { RECALL.far = 0; return; }
+  const h = headPose();
+  if (!h) return;
+  const d = Math.hypot(h.pos.x - phys.target.x, h.pos.z - phys.target.z);
+  if (d < 1.8) { RECALL.far = 0; return; }
+  if (!RECALL.far) RECALL.far = now;
+  if (now - RECALL.far > 1200) { RECALL.far = 0; recallDashboard(); }
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
@@ -4386,7 +4411,7 @@ window.TM = {
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => {
-    [["follow", stepFollow], ["physics", stepPhysics], ["grab", stepGrab], ["anims", stepAnims], ["piles", (n) => PILES.forEach((p) => p.update(n))],
+    [["follow", stepFollow], ["recall", stepRecall], ["physics", stepPhysics], ["grab", stepGrab], ["anims", stepAnims], ["piles", (n) => PILES.forEach((p) => p.update(n))],
      ["pulse", stepPulse], ["grok", stepOrb], ["hands", stepHands], ["ball", stepBall], ["vault", stepVault], ["mine", stepMine], ["oil", stepOil]].forEach(([tag, f]) => { try { f(now); } catch (e) { reportErr(tag, e); } });
   },
   // cash heap: light up when a hand is near, lift on pinch, carry, let go
@@ -5090,6 +5115,8 @@ function aiLocal(q) {
   const s = String(q || "").toLowerCase().replace(/[.,!?]+/g, " ").replace(/\s+/g, " ").trim()
     .replace(/^(hey |ok |okay |um |uh |so |grok |please |can you |could you |would you |i want to |let's |lets )+/, "").replace(/ please$/, "").trim();
   if (!s) return null;
+  if (/^(come (here|back|over|to me)|over here|bring (it|the (dashboard|table|board|market)) (here|back|over|to me)|follow me)$/.test(s))
+    return { action: { type: "recall" }, say: "Coming!" };
   if (/^(go |take me |head |get )?(back|home)( to (the )?(lobby|list|markets?|menu|home|main( menu| screen)?|start))?$/.test(s) ||
       /^(back to|return to|go to) (the )?(lobby|list|all markets|main menu|home)$/.test(s) || /^(close|exit|leave) (this|the) (market|game)$/.test(s))
     return { action: { type: "back" }, say: "Okay!" };
@@ -5207,6 +5234,7 @@ function aiDo(a) {
     state.scroll = 0; actLoad(); refresh(); return "";
   }
   if (a.type === "search") { doSearch(a.words || a.name || ""); return ""; }
+  if (a.type === "recall") { recallDashboard(); return ""; }
   if (a.type === "simulate") { if (inMarket() && !LIVE.on && !state.sim) toggleSim(); return ""; }
   if (a.type === "open") return aiOpen(a), "";
   if (a.type === "order") return aiOrder(a);
