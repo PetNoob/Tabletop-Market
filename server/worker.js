@@ -85,7 +85,41 @@ export default {
         return new Response(r.body, { status: 200, headers: h });
       }
 
-      // ---------- MoonPay test-mode card deposits (the keys live only here, in Cloudflare) ----------
+      // ---------- MoonPay Platform (test mode): the steps that need the secret key run here ----------
+      // POST /mp/session            -> { sessionToken } (MoonPay: POST /platform/v1/sessions, X-Api-Key)
+      // POST /mp/quote {accessToken, amount, wallet, asset} -> the quote, including its signature (Bearer = the customer's token)
+      // GET  /mp/tx?id=&token=      -> a transaction's status (Bearer = the customer's token)
+      if (path === "/mp/session" || path === "/mp/quote" || path === "/mp/tx") {
+        if (!env.MOONPAY_SECRET_KEY) return reply({ error: "MoonPay keys are not set up" }, 503);
+        const ip = request.headers.get("CF-Connecting-IP") || "";
+        if (!rateOk("mp2:" + ip, 120)) return reply({ error: "Too many requests, try again in a bit" }, 429);
+        const API = env.MOONPAY_API || "https://api.moonpay.dev";
+        const call = async (method, p, headers, body) => {
+          const r = await fetch(API + p, { method, headers: Object.assign({ "Content-Type": "application/json", "Accept": "application/json" }, headers),
+                                           body: body ? JSON.stringify(body) : undefined });
+          const j = await r.json().catch(() => ({}));
+          if (!r.ok) return reply({ error: "MoonPay " + r.status + ": " + String(j.message || j.title || j.detail || j.type || JSON.stringify(j)).slice(0, 200) }, 502);
+          return reply(j);
+        };
+        if (path === "/mp/session") return call("POST", "/platform/v1/sessions", { "X-Api-Key": env.MOONPAY_SECRET_KEY }, { deviceIp: ip || "127.0.0.1" });
+        if (path === "/mp/tx") {
+          const q = new URL(request.url).searchParams, id = q.get("id") || "", token = q.get("token") || "";
+          if (!/^[A-Za-z0-9_-]{4,80}$/.test(id) || !token) return reply({ error: "Bad request" }, 400);
+          return call("GET", "/platform/v1/transactions/" + id, { "Authorization": "Bearer " + token });
+        }
+        const b = request.method === "POST" ? await request.json().catch(() => ({})) : {};
+        const amount = Math.round(Math.min(500, Math.max(21, parseFloat(b.amount) || 25)) * 100) / 100;
+        const asset = /^[A-Z]{2,6}$/.test(String(b.asset || "")) ? b.asset : (env.MOONPAY_ASSET || "ETH");
+        if (!b.accessToken || !/^0x[0-9a-fA-F]{40}$/.test(String(b.wallet || ""))) return reply({ error: "Missing token or wallet" }, 400);
+        return call("POST", "/platform/v1/quotes/buy", { "Authorization": "Bearer " + b.accessToken }, {
+          source: { asset: { code: "USD" }, amount: String(amount) },
+          destination: { asset: { code: asset } },
+          wallet: { address: b.wallet },
+          paymentMethod: { type: "card" }
+        });
+      }
+
+      // ---------- MoonPay classic widget link (older accounts; kept for reference) ----------
       // /moonpay-url?amount=25&wallet=0x...  -> a signed link to MoonPay's checkout (sandbox), and an id for this purchase
       // /moonpay-check?ext=<id>             -> what MoonPay says happened to that purchase (status and amount)
       if (path === "/moonpay-url" || path === "/moonpay-check") {

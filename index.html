@@ -4189,22 +4189,6 @@ function mpBanner(text, good) {
   }
   b.style.color = good ? "#ffc552" : "#c9cfd6"; b.textContent = text;
 }
-async function moonpayStart() {
-  const amount = Math.max(MP.min, ADD.amount);
-  ADD.busy = true; ADD.mpMsg = "Opening MoonPay..."; refreshAdd(); refresh();
-  try {
-    const wallet = ARC.wallet && ARC.wallet.address ? ARC.wallet.address : "";
-    const r = await fetch(S.serverUrl.replace(/\/+$/, "") + "/moonpay-url?amount=" + amount + (wallet ? "&wallet=" + wallet : ""));
-    const j = await r.json();
-    if (!r.ok || j.error) throw new Error(j.error || "server said " + r.status);
-    store.set("tm-mp", JSON.stringify({ ext: j.ext, amount: j.amount, live: LIVE.on, t: Date.now() }));
-    saveTestState();
-    try { if (scene.is("ar-mode") || scene.is("vr-mode")) scene.exitVR(); } catch (e) {}
-    setTimeout(() => { location.href = j.url; }, 350);                                    // leave AR, then MoonPay's checkout
-  } catch (e) {
-    ADD.busy = false; ADD.mpMsg = "MoonPay: " + trunc(String(e.message || e), 40); refreshAdd(); refresh();
-  }
-}
 // back from MoonPay: ask the server what MoonPay says, then add the dollars (test mode only)
 async function moonpayReturn() {
   let p = null; try { p = JSON.parse(store.get("tm-mp") || "null"); } catch (e) {}
@@ -4231,6 +4215,149 @@ async function moonpayReturn() {
   mpBanner("MoonPay has not confirmed the test purchase yet. Nothing was added.");
 }
 if (/[?&]mp=1/.test(location.search)) window.addEventListener("load", () => setTimeout(moonpayReturn, 800));
+
+/* ---------- MoonPay Platform checkout (test mode), shown on the page outside AR ----------
+   MoonPay's newer platform runs in its own frames (platform.moonpay.com), so it cannot appear inside AR.
+   Pressing "Pay with MoonPay" steps out of AR and opens this window over the page (no reload, the table is kept):
+     1. our server starts a MoonPay session (secret key stays on the server)
+     2. a hidden "check" frame looks for an existing connection; if needed, the "connect" frame lets you sign in
+        (test mode: an email like test-you@moonpay.test, code 123456; phone +15005550000)
+     3. MoonPay sends back encrypted credentials; only this page can open them (X25519 key made here, AES-GCM)
+     4. our server gets a price quote with the customer's token; then MoonPay's payment widget opens
+        (test card 4000 0200 0000 0000, 12/2030, CVV 100)
+     5. when MoonPay says the purchase is done, the TEST balance goes up (in live mode nothing is added)
+   Frames talk by messages {version: 2, meta: {channelId}, kind, payload}; every "handshake" is answered with "ack". */
+const MPO = "https://platform.moonpay.com";
+const hex = { to: (u8) => Array.from(u8, (b) => b.toString(16).padStart(2, "0")).join(""),
+              from: (h) => new Uint8Array(String(h).match(/../g).map((x) => parseInt(x, 16))) };
+let MPX = null;   // the running checkout: { keys, pubHex, frames, token, ... }
+async function mpKeys() {
+  if (crypto.subtle && crypto.subtle.generateKey) {
+    try {
+      const kp = await crypto.subtle.generateKey({ name: "X25519" }, true, ["deriveBits"]);
+      const pub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+      return { pubHex: hex.to(pub), shared: async (ephHex) => {
+        const eph = await crypto.subtle.importKey("raw", hex.from(ephHex), { name: "X25519" }, false, []);
+        return new Uint8Array(await crypto.subtle.deriveBits({ name: "X25519", public: eph }, kp.privateKey, 256)); } };
+    } catch (e) { console.warn("X25519 not in this browser, using a small library instead", e); }
+  }
+  const lib = await import("https://cdn.jsdelivr.net/npm/@noble/curves@1.4.0/ed25519.js/+esm");
+  const priv = lib.x25519.utils.randomPrivateKey();
+  return { pubHex: hex.to(lib.x25519.getPublicKey(priv)), shared: async (ephHex) => lib.x25519.getSharedSecret(priv, hex.from(ephHex)) };
+}
+// MoonPay's credentials: base64 JSON {ephemeralPublicKey, iv, ciphertext} -> X25519 -> HKDF-SHA256 (32 bytes) -> AES-GCM -> JSON
+async function mpDecrypt(credentials) {
+  const box = JSON.parse(atob(credentials));
+  const shared = await MPX.keys.shared(box.ephemeralPublicKey);
+  const hk = await crypto.subtle.importKey("raw", shared, "HKDF", false, ["deriveKey"]);
+  const aes = await crypto.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: new Uint8Array(0) }, hk,
+                                            { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: hex.from(box.iv) }, aes, hex.from(box.ciphertext));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+function mpUI() {
+  let o = document.getElementById("mpOverlay");
+  if (o) return o;
+  o = document.createElement("div"); o.id = "mpOverlay";
+  o.style.cssText = "position:fixed;inset:0;z-index:40;background:rgba(10,11,13,.94);display:none;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,sans-serif;color:#f2f4f7";
+  o.innerHTML = '<div style="width:min(460px,94vw);text-align:center">' +
+    '<div style="font-size:20px;font-weight:650;margin-bottom:4px">Add money with MoonPay</div>' +
+    '<div style="font-size:12px;color:#ffb22e;margin-bottom:10px">TEST MODE: no real money. Test card 4000 0200 0000 0000, 12/2030, CVV 100</div>' +
+    '<div id="mpStatus" style="font-size:14px;color:#c9cfd6;min-height:20px;margin-bottom:10px"></div>' +
+    '<div id="mpFrames" style="width:100%;height:min(640px,72vh);border-radius:14px;overflow:hidden;background:#15171a"></div>' +
+    '<button id="mpClose" style="margin-top:12px;font:inherit;background:transparent;color:#c9cfd6;border:1px solid #3a3f47;border-radius:10px;padding:9px 18px;cursor:pointer">Close</button></div>';
+  document.body.appendChild(o);
+  o.querySelector("#mpClose").onclick = () => mpClose();
+  return o;
+}
+const mpSay = (t) => { const s = document.getElementById("mpStatus"); if (s) s.textContent = t; };
+function mpClose() {
+  const o = document.getElementById("mpOverlay");
+  if (o) { o.style.display = "none"; o.querySelector("#mpFrames").innerHTML = ""; }
+  MPX = null;
+  welcome.style.display = "";                                                           // back to the start screen: press Enter for the table
+}
+// open one MoonPay frame; onMsg(kind, payload) gets its messages (handshakes are answered here)
+function mpFrame(pathAndQuery, visible, onMsg) {
+  const ch = crypto.randomUUID(), f = document.createElement("iframe");
+  f.src = MPO + pathAndQuery + (pathAndQuery.includes("?") ? "&" : "?") + "channelId=" + ch;
+  f.allow = "payment; clipboard-write";
+  f.style.cssText = visible ? "width:100%;height:100%;border:0;background:#fff" : "width:1px;height:1px;border:0;position:absolute;left:-9999px";
+  document.getElementById("mpFrames").appendChild(f);
+  const handler = (ev) => {
+    if (ev.origin !== MPO) return;
+    let m = ev.data; try { if (typeof m === "string") m = JSON.parse(m); } catch (e) { return; }
+    if (!m || !m.meta || m.meta.channelId !== ch) return;
+    if (m.kind === "handshake") { f.contentWindow.postMessage(JSON.stringify({ version: 2, meta: { channelId: ch }, kind: "ack" }), MPO); return; }
+    onMsg(m.kind, m.payload || {}, f);
+  };
+  window.addEventListener("message", handler);
+  f.tmDone = () => { window.removeEventListener("message", handler); f.remove(); };
+  return f;
+}
+const srv = (p) => S.serverUrl.replace(/\/+$/, "") + p;
+async function moonpayStart() {
+  const amount = Math.max(MP.min, ADD.amount), live = LIVE.on;
+  closeAdd();
+  try { if (scene.is("ar-mode") || scene.is("vr-mode")) scene.exitVR(); } catch (e) {}
+  const o = mpUI(); o.style.display = "flex"; welcome.style.display = "none";
+  MPX = { amount, live };
+  try {
+    mpSay("Starting a secure MoonPay session...");
+    MPX.keys = await mpKeys();
+    const s = await (await fetch(srv("/mp/session"), { method: "POST" })).json();
+    if (!s.sessionToken) throw new Error(s.error || "no session");
+    mpSay("Checking for a MoonPay account...");
+    const creds = await new Promise((resolve, reject) => {
+      const chk = mpFrame("/platform/v1/check-connection?sessionToken=" + encodeURIComponent(s.sessionToken) + "&publicKey=" + MPX.keys.pubHex, false, async (kind, p, f) => {
+        if (kind === "error") { f.tmDone(); return reject(new Error(p.message || p.code || "check failed")); }
+        if (kind !== "complete") return;
+        f.tmDone();
+        try {
+          if (p.status === "active" && p.credentials) return resolve(await mpDecrypt(p.credentials));
+          if (p.status === "connectionRequired" && p.credentials) {
+            const anon = await mpDecrypt(p.credentials);
+            mpSay("Sign in to MoonPay (test: an email ending in @moonpay.test, code 123456)");
+            mpFrame("/platform/v1/connect?clientToken=" + encodeURIComponent(anon.clientToken) + "&publicKey=" + MPX.keys.pubHex + "&theme=dark", true, async (k2, p2, f2) => {
+              if (k2 === "error") { f2.tmDone(); return reject(new Error(p2.message || p2.code || "sign-in failed")); }
+              if (k2 !== "complete") return;
+              f2.tmDone();
+              if ((p2.status === "active" || p2.status === "pending") && p2.credentials) resolve(await mpDecrypt(p2.credentials));
+              else reject(new Error("MoonPay sign-in: " + (p2.reason || p2.status)));
+            });
+            return;
+          }
+          reject(new Error("MoonPay says: " + (p.reason || p.status)));
+        } catch (e) { reject(e); }
+      });
+    });
+    MPX.token = creds.accessToken;
+    mpSay("Getting a price for " + money(amount) + "...");
+    const wallet = ARC.wallet && ARC.wallet.address ? ARC.wallet.address : "0x000000000000000000000000000000000000dEaD";
+    const qr = await (await fetch(srv("/mp/quote"), { method: "POST", headers: { "Content-Type": "application/json" },
+                                                     body: JSON.stringify({ accessToken: creds.accessToken, amount, wallet }) })).json();
+    const quote = qr.data || qr;
+    if (!quote.signature) throw new Error(qr.error || "no quote");
+    mpSay("Pay with the test card: 4000 0200 0000 0000, 12/2030, CVV 100");
+    const result = await new Promise((resolve, reject) => {
+      mpFrame("/platform/v1/widget?flow=buy&clientToken=" + encodeURIComponent(creds.clientToken) + "&quoteSignature=" + encodeURIComponent(quote.signature), true, (kind, p, f) => {
+        if (kind === "transactionCreated") MPX.txId = (p.transaction && p.transaction.id) || p.id || MPX.txId;
+        if (kind === "error") { f.tmDone(); reject(new Error(p.message || p.code || "payment failed")); }
+        if (kind === "complete") { f.tmDone(); resolve(p); }
+      });
+    });
+    const st = String(result.status || (result.transaction && result.transaction.status) || "");
+    if (st === "failed") throw new Error("the test payment failed");
+    if (MPX.live) { mpSay("Done: MoonPay test purchase completed. Test mode, so nothing is added to your real Gemini balance."); sfx("pick", 0.55); return; }
+    state.balance = Math.round((state.balance + amount) * 100) / 100;
+    logActivity({ side: "Added", title: "Added with MoonPay (test card)", what: "MoonPay sandbox", amount });
+    saveTestState(); refresh(); sfx("pick", 0.55);
+    mpSay("Done: " + money(amount) + " added to your test balance. Press Close, then Enter to go back to the table.");
+  } catch (e) {
+    console.warn("MoonPay:", e);
+    mpSay("MoonPay: " + String(e.message || e).slice(0, 160));
+  }
+}
 
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
