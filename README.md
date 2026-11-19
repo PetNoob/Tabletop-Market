@@ -5,7 +5,7 @@
 Tabletop Market is a mixed reality web app for Meta Quest 3. A live prediction market from Gemini appears as an object on your real table: a small court with the market's odds, a price graph, and a pile of cash that shows what your pick is worth right now. You pick a side by touching it. You cash out by pinching the money and lifting it off the table. Every pick's stake is locked in a contract on Arc, and USDC moves from Arc toward Gemini through Circle's bridge (CCTP).
 
 - **Live app:** https://petnoob.github.io/Tabletop-Market/
-- **Escrow contract (Arc testnet):** [`0xB042A8BF2c3a65093967c9Ef053bFD11d145Ee0d`](https://explorer.testnet.arc.io/address/0xB042A8BF2c3a65093967c9Ef053bFD11d145Ee0d)
+- **Escrow contract (Arc testnet):** [`0xB042A8BF2c3a65093967c9Ef053bFD11d145Ee0d`](https://explorer.testnet.arc.io/address/0xB042A8BF2c3a65093967c9Ef053bFD11d145Ee0d) (source verified on the explorer, so every pick and cash-out shows as a readable receipt)
 - **Circle's bridge (CCTP) on Arc testnet:** TokenMessengerV2 `0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa`, USDC `0x3600000000000000000000000000000000000000`
 - **Track:** Consumer Applications
 - **Chain award:** Best use of Arc
