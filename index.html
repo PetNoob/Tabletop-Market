@@ -2806,6 +2806,7 @@ function followCapture() {
   FOLLOW.off.copy(phys.target).sub(h.pos).applyAxisAngle(YAXIS, -h.yaw);
   FOLLOW.yawOff = phys.targetYaw - h.yaw;
   FOLLOW.turning = FOLLOW.moving = false;
+  FOLLOW.hp = null; FOLLOW.v = 0;                                        // start the walking speed fresh
   return true;
 }
 function toggleFollow() {
@@ -2836,9 +2837,18 @@ function stepFollow(now) {
   if (Math.abs(dy) > 0.35) FOLLOW.turning = true;
   if (FOLLOW.turning) { FOLLOW.yaw = wrapAngle(FOLLOW.yaw + dy * Math.min(1, dt * 3.2)); if (Math.abs(dy) < 0.03) FOLLOW.turning = false; }
   // walking: wait for a clear step, then catch up; height follows gently (sitting down, standing up)
+  // how fast you are walking (smoothed); the faster you walk, the faster it keeps ahead and the stiffer the spring,
+  // so walking toward it no longer runs you into it; standing still it is as soft and floaty as before
+  if (FOLLOW.hp) {
+    const sp = Math.hypot(h.pos.x - FOLLOW.hp.x, h.pos.z - FOLLOW.hp.z) / dt;
+    FOLLOW.v = (FOLLOW.v || 0) + (Math.min(3, sp) - (FOLLOW.v || 0)) * Math.min(1, dt * 6);
+  }
+  FOLLOW.hp = (FOLLOW.hp || new THREE.Vector3()).copy(h.pos);
+  const w = Math.min(1, (FOLLOW.v || 0) / 0.6);                          // 0 standing, 1 at a normal walk
+  phys.K = 110 + 190 * w; phys.D = 16 + 16 * w;
   const dx = h.pos.x - FOLLOW.pos.x, dz = h.pos.z - FOLLOW.pos.z, d = Math.hypot(dx, dz);
-  if (d > 0.15) FOLLOW.moving = true;
-  if (FOLLOW.moving) { const k = Math.min(1, dt * 3); FOLLOW.pos.x += dx * k; FOLLOW.pos.z += dz * k; if (d < 0.02) FOLLOW.moving = false; }
+  if (d > 0.15 - 0.1 * w) FOLLOW.moving = true;
+  if (FOLLOW.moving) { const k = Math.min(1, dt * (3 + 8 * w)); FOLLOW.pos.x += dx * k; FOLLOW.pos.z += dz * k; if (d < 0.02) FOLLOW.moving = false; }
   const ddy = h.pos.y - FOLLOW.pos.y;
   if (Math.abs(ddy) > 0.08) FOLLOW.pos.y += ddy * Math.min(1, dt * 2);
   // where the dashboard should be now; the spring does the rest
