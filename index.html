@@ -4404,10 +4404,31 @@ function stepRecall(now) {
   if (now - RECALL.far > 1200) { RECALL.far = 0; recallDashboard(); }
 }
 
+/* ---------- "hi Grok": raise an open hand toward him to wake him from anywhere ----------
+   Hand above shoulder height, fingers spread (tips far from the wrist), palm turned toward Grok (or the back of the
+   hand: either side counts), held for about half a second. He wakes with his startled hop and a greeting. */
+const WAVE = [];
+const wv1 = new THREE.Vector3(), wv2 = new THREE.Vector3(), wv3 = new THREE.Vector3(), wv4 = new THREE.Vector3();
+function grokWave(i, joints) {
+  if (!UI.orbAt || !joints || AI.mode !== "sleep") { WAVE[i] = 0; return; }
+  const now = performance.now(), h = headPose();
+  if (!h) return;
+  const L = Math.max(0.05, joints[0].distanceTo(joints[10]));
+  const open = (joints[9].distanceTo(joints[0]) + joints[14].distanceTo(joints[0]) + joints[19].distanceTo(joints[0]) + joints[24].distanceTo(joints[0])) / 4 / L;
+  const raised = joints[10].y > h.pos.y - 0.22;                                        // up around head height
+  const n = wv1.crossVectors(wv2.subVectors(joints[5], joints[0]), wv3.subVectors(joints[20], joints[0])).normalize();   // palm normal
+  const toGrok = wv4.subVectors(UI.orbAt.object3D.position, joints[10]).normalize();
+  const facing = Math.abs(n.dot(toGrok)) > 0.6;
+  if (open > 1.75 && raised && facing) {
+    if (!WAVE[i]) WAVE[i] = now;
+    if (now - WAVE[i] > 550) { WAVE[i] = 0; grokPat(wv2.set(0, 0.4, 0), 0.4); }        // the same wake-up as a pat
+  } else WAVE[i] = 0;
+}
+
 /* ---------- hooks used by the headset input code ---------- */
 const vTmp = new THREE.Vector3();
 window.TM = {
-  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); railTouch(i, j); ballTouch(i, j); vaultTouch(i, j); mineTouch(i, j); oilTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
+  state, press, openMarket, backToLobby, phys, shove, resizeStart, resizeMove, resizeEnd, drawGlove: (i, j) => drawGlove(i, j), handTouch: (i, j) => { grokTouch(i, j); grokWave(i, j); railTouch(i, j); ballTouch(i, j); vaultTouch(i, j); mineTouch(i, j); oilTouch(i, j); }, handPose: (s, j, q) => handPose(s, j, q),
   // the headset code says where the base should go; the spring makes it follow
   setTarget: (pos, yaw) => { phys.target.copy(pos); if (yaw != null) phys.targetYaw = yaw; },
   frame: (now) => {
@@ -5002,7 +5023,7 @@ function vadTick() {
   }
   if (!AI.speech && age > 3000) recCut(false);                          // nothing said: throw away the silence
   if (AI.speech) AI.awakeT = now;
-  if (!AI.speech && now - AI.awakeT > 25000) aiMode("sleep");           // 25 quiet seconds: he dozes off
+  if (!AI.speech && now - AI.awakeT > (S.grokAwakeMs || 60000)) aiMode("sleep");   // a minute of quiet: he dozes off
 }
 async function handleClip(blob) {
   if (!blob || blob.size < 1500) return;
