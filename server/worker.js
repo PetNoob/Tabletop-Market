@@ -93,7 +93,7 @@ export default {
         if (!env.MOONPAY_SECRET_KEY) return reply({ error: "MoonPay keys are not set up" }, 503);
         const ip = request.headers.get("CF-Connecting-IP") || "";
         if (!rateOk("mp2:" + ip, 120)) return reply({ error: "Too many requests, try again in a bit" }, 429);
-        const API = env.MOONPAY_API || "https://api.moonpay.dev";
+        const API = env.MOONPAY_API || "https://api.moonpay.com";                // the sk_test_ key itself means test mode
         const call = async (method, p, headers, body) => {
           const r = await fetch(API + p, { method, headers: Object.assign({ "Content-Type": "application/json", "Accept": "application/json" }, headers),
                                            body: body ? JSON.stringify(body) : undefined });
