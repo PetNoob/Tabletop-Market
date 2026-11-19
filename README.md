@@ -108,6 +108,14 @@ Every market type Gemini offers is supported. Team-vs-team games are drawn as a 
 
 Arc is Circle's blockchain, where USDC is the native currency. Tabletop Market uses it as the cash register: every pick's stake is locked in a contract with a public receipt, and every cash-out releases it.
 
+**Why this matters: trust on a new site.** A brand-new app has no reputation, so people have little reason to trust it with their money. Arc changes the question from "do you trust us?" to "check for yourself":
+
+- **Receipts no one can edit.** Every pick and every cash-out leaves a public record on Arc (what was picked, at what odds, for how much). Nobody can change or delete it afterwards, including us. If the app ever recorded something wrong, that mistake would stay public, so cheating would leave evidence.
+- **Money only the user can take back.** Locked USDC is not just recorded; the contract's code decides where it can go. There is no owner and no admin key, so we cannot touch a user's stake. Only the wallet that locked it can cash it out.
+- **Anyone can check.** Most users will never open the explorer themselves, the same way most diners never read a restaurant's inspection report. The trust comes from knowing that anyone can.
+
+Limits, stated plainly: this runs on Arc's testnet with test USDC; the contract holds and returns the stake but does not pay winnings yet; and the odds written into a receipt come from Gemini through our app, so the receipt proves what was recorded, not that our app recorded it correctly.
+
 - **Contract:** [`contracts/TabletopEscrow.sol`](contracts/TabletopEscrow.sol), deployed at `0xB042A8BF2c3a65093967c9Ef053bFD11d145Ee0d` on Arc testnet (chain ID 5042002).
 - **`placePick(key, oddsBps, receipt)`** locks the USDC sent with it under that pick, records the odds, and emits a readable receipt such as `Orlando vs Boston | Boston | 77% | $5.00`. In live mode the receipt also names the Gemini order number, so an onchain lock can be matched to a real trade.
 - **`cashOut(key, shareBps, receipt)`** sends a share of the caller's locked USDC back to the caller. Partial cash-outs release the same share as the user lifted off the table.
@@ -115,7 +123,7 @@ Arc is Circle's blockchain, where USDC is the native currency. Tabletop Market u
 - USDC on Arc is native, so the stake is sent as the transaction's value and fees are paid in USDC too. The user never sees any of it: no wallet, no pop-up, no gas token.
 - To stretch the testnet faucet (10 USDC per hour), each app dollar locks 0.01 test USDC.
 
-The **Blockchain setup** link on the welcome screen shows the wallet, its balance, the contract, and recent receipts with explorer links.
+The **Advanced: practice network** link on the welcome screen shows the wallet, its balance, the contract, and recent receipts with explorer links.
 
 #### Move to Gemini: Arc to Base with Circle's CCTP
 
@@ -127,7 +135,7 @@ Gemini accepts USDC deposits on Base (not on Arc). So the money path from a user
 4. **Circle confirms and mints on Base:** the app polls `GET /v2/messages/26?transactionHash=…` until it returns the `forwardTxHash` of the mint on Base Sepolia.
 5. **Deposit into Gemini:** the next step in the real product. Gemini takes USDC on Base, but only real USDC.
 
-The Blockchain setup panel shows the four steps with a receipt link for the burn on Arc and the mint on Base. They also appear in **Activity > History** in the headset.
+The practice network panel shows the four steps with a receipt link for the burn on Arc and the mint on Base. They also appear in **Activity > History** in the headset.
 
 ### Live trading (owner only)
 
@@ -180,7 +188,7 @@ python -m http.server 8123
 Then open http://localhost:8123. Settings (table height, distance, scale, spring feel, hand style, Arc network, contract address) are in the `SETTINGS` block at the top of `index.html`.
 
 **The contract**
-On the welcome screen, open **Blockchain setup**, fund the wallet at [faucet.circle.com](https://faucet.circle.com) (choose Arc Testnet), and press **Deploy contract**. The page compiles `contracts/TabletopEscrow.sol` in the browser (solc 0.8.26) and deploys it. Put the new address in `SETTINGS.arc.escrow`.
+On the welcome screen, open **Advanced: practice network**, fund the wallet at [faucet.circle.com](https://faucet.circle.com) (choose Arc Testnet), and press **Deploy contract**. The page compiles `contracts/TabletopEscrow.sol` in the browser (solc 0.8.26) and deploys it. Put the new address in `SETTINGS.arc.escrow`.
 
 **The live-trading server**
 1. Create a Cloudflare Worker and paste in `server/worker.js`.
