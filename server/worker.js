@@ -107,14 +107,18 @@ export default {
           p.set("theme", "dark");
           p.set("colorCode", "#ff8c32");
           p.set("redirectURL", (ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0]) + "/Tabletop-Market/?mp=1");
-          if (/^0x[0-9a-fA-F]{40}$/.test(wallet)) p.set("walletAddress", wallet);
+          // a wallet address must be signed with MoonPay's signing secret (dashboard: Developers > API keys > Request signing).
+          // Without MOONPAY_SIGNING_KEY the link has no wallet and no signature, and MoonPay asks for a wallet itself.
+          const signKey = env.MOONPAY_SIGNING_KEY || "";
+          if (signKey && /^0x[0-9a-fA-F]{40}$/.test(wallet)) p.set("walletAddress", wallet);
           const query = "?" + p.toString();
-          // MoonPay checks this signature: HMAC-SHA256 of the query string with the secret key, in base64
-          const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.MOONPAY_SECRET_KEY), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+          const host = env.MOONPAY_HOST || "https://buy-sandbox.moonpay.com";
+          if (!signKey || !p.has("walletAddress")) return reply({ url: host + "/" + query, ext, amount, sandbox: /sandbox/.test(host), signed: false });
+          // MoonPay checks this signature: HMAC-SHA256 of the exact query string with the signing secret, in base64
+          const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(signKey), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
           const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(query)));
           let bin = ""; sig.forEach((b) => { bin += String.fromCharCode(b); });
-          const host = env.MOONPAY_HOST || "https://buy-sandbox.moonpay.com";
-          return reply({ url: host + "/" + query + "&signature=" + encodeURIComponent(btoa(bin)), ext, amount, sandbox: /sandbox/.test(host) });
+          return reply({ url: host + "/" + query + "&signature=" + encodeURIComponent(btoa(bin)), ext, amount, sandbox: /sandbox/.test(host), signed: true });
         }
         const ext = q.get("ext") || "";
         if (!/^tm-[0-9a-f-]{36}$/.test(ext)) return reply({ error: "Bad purchase id" }, 400);
