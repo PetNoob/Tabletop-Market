@@ -4380,7 +4380,7 @@ function mpFallback() {
 }
 
 /* ---------- come here: bring the dashboard back in front of you ----------
-   If you walk more than about 1.8 m away from it (and Follow is off) it glides back in front of you after a moment;
+   If you walk more than about 10 m away from it (and Follow is off) it glides back in front of you after a moment;
    saying "come here" to Grok calls it from any distance. It travels on the same spring, a little softer for the trip. */
 const RECALL = { far: 0, until: 0 };
 function recallDashboard() {
@@ -4399,7 +4399,7 @@ function stepRecall(now) {
   const h = headPose();
   if (!h) return;
   const d = Math.hypot(h.pos.x - phys.target.x, h.pos.z - phys.target.z);
-  if (d < 1.8) { RECALL.far = 0; return; }
+  if (d < 10) { RECALL.far = 0; return; }                                               // 10 m away: bring it back
   if (!RECALL.far) RECALL.far = now;
   if (now - RECALL.far > 1200) { RECALL.far = 0; recallDashboard(); }
 }
