@@ -193,7 +193,7 @@ export default {
       if (path === "/stt" || path === "/ask" || path === "/tts") {
         if (request.method !== "POST" && !(path === "/tts" && request.method === "GET")) return reply({ error: "Use POST" }, 405);
         const ip = request.headers.get("CF-Connecting-IP") || "?";
-        if (!rateOk(ip, 200)) return reply({ error: "Too many requests, try again in a bit" }, 429);
+        if (!rateOk(ip, 400)) return reply({ error: "Too many requests, try again in a bit" }, 429);
 
         // listening: audio from the headset microphone -> text (ElevenLabs Scribe)
         if (path === "/stt") {
