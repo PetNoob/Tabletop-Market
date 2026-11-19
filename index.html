@@ -4178,7 +4178,7 @@ function sfx(name, vol, rate) {
    and opens MoonPay's real checkout in sandbox mode (test card only, no real charge). MoonPay sends you back here;
    the server asks MoonPay what happened, and only a real (test) purchase adds dollars to the test balance.
    In live mode it opens the same test checkout to show it works, but NEVER adds anything to the real Gemini balance. */
-const MP = { ok: false, min: 20 };
+const MP = { ok: false, min: 21 };                                   // MoonPay's smallest card purchase is $21 (checked in test mode)
 if (S.serverUrl) fetch(S.serverUrl.replace(/\/+$/, "") + "/status").then((r) => r.json()).then((s) => { MP.ok = !!s.moonpay; try { refreshAdd(); } catch (e) {} }).catch(() => {});
 function mpBanner(text, good) {
   let b = document.getElementById("mpBanner");
