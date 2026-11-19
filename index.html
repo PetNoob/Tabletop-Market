@@ -4827,7 +4827,7 @@ const AI = { mode: "sleep", ready: null, lvl: 0, buf: null, listening: false, fl
              squash: 0, squashV: 0, flare: 0, wakeT: -1e9, touch: [{}, {}],
              nextBlink: 0, blinkT: -1e9, hopT: -1e9 };
 const GNAME = /\b(grok|grock|groc|grog|groke|growk|grokk)\b/i;          // his name anywhere in a sentence
-const GSLEEP = /\b(go (back )?to sleep|good ?night|nap time|take a nap|stop listening|sleep now)\b/i;
+const GSLEEP = /\b((go|get|fall|drift|head) (back )?(to )?(sleep|asleep)|go (back )?to bed|good ?night|night night|nap time|(take|have) a nap|sleep mode|stop listening|goodbye)\b/i;   // clear phrases only ("cash out the rest" must not match)
 // may he answer this sentence without hearing his name? (name mode off, an open yes/no question, or he just spoke)
 const grokFree = () => !S.grokNeedName || !!AI.pending || performance.now() - (AI.spokeEnd || 0) < (S.grokFollowMs || 7000);
 const WAKE = /\b(hey|hi|hay|ok|okay|yo|a)\W{0,3}(grok|grock|groc|grog|groke|growk|brock|crock|rock|grow)\b/i;
@@ -5123,7 +5123,7 @@ function aiSpeak(text, then, id) {
   return new Promise((resolve) => {
     if (id && id !== AI.req) return resolve();                          // you already asked something newer
     if (AI.mode === "awake" && AI.speech) return resolve();             // you started talking: don't talk over you
-    const a = aiVoiceEl(), finish = (mode) => { aiVoiceDone(); aiMode(mode); resolve(); };
+    const a = aiVoiceEl(), finish = (mode) => { aiVoiceDone(); if (AI.sleepAfter) { AI.sleepAfter = false; mode = "sleep"; } aiMode(mode); resolve(); };
     a.onplaying = () => {
       if (id && id !== AI.req) { a.pause(); return finish("awake"); }
       AI.elPlaying = true; aiMode("speaking");
@@ -5233,6 +5233,7 @@ function aiContext() {
   L.push('{"type":"search","words":"<what to look for>"} to search all open markets');
   L.push('{"type":"activity","tab":"positions" | "orders" | "history"} to show the user\'s activity');
   L.push('{"type":"simulate"} to simulate the odds (test money only)');
+  L.push('{"type":"sleep"} when the user tells you to sleep, nap, rest, stop listening, or says goodbye/good night');
   if (inMarket()) {
     L.push('{"type":"order","answer":<Answer index>,"side":"yes" | "no","amount":<dollars>} to place a pick the user asked for (they must say the side and the amount)');
     L.push('{"type":"cashout","answer":<Answer index>,"percent":<1 to 100>} to cash out part or all of a pick the user holds');
@@ -5282,6 +5283,7 @@ function aiDo(a) {
   }
   if (a.type === "search") { doSearch(a.words || a.name || ""); return ""; }
   if (a.type === "recall") { recallDashboard(); return ""; }
+  if (a.type === "sleep" || a.type === "go_to_sleep") { AI.sleepAfter = true; return ""; }     // he falls asleep when he finishes talking
   if (a.type === "simulate") { if (inMarket() && !LIVE.on && !state.sim) toggleSim(); return ""; }
   if (a.type === "open") return aiOpen(a), "";
   if (a.type === "order") return aiOrder(a);
