@@ -112,6 +112,8 @@ const SETTINGS = {
   assistant: true,
   grokDebug: false,
   grokPauseMs: 650,    // how long a silence means you finished your sentence (ms); longer = patient with slow talkers
+  grokNeedName: true,  // true = while awake he only answers sentences with "Grok" in them (talk freely, e.g. voiceovers)
+  grokFollowMs: 7000,  // ...except for this long after he finished speaking, so a quick reply needs no name
   grokInterrupt: false, // true = you can cut Grok off while he talks; false = he finishes first (the older behaviour)      // testing aid: a small note under Grok shows what he heard and any problem. Set false for the demo     // the talking orb (needs serverUrl, with Grok and ElevenLabs keys on the server)
   icons: true,          // show Gemini's market pictures (needs serverUrl, which passes them through)
   brushStrength:   0.35, // how much a touching hand shoves it. 0 = hands do not move it
@@ -4824,6 +4826,10 @@ arcPanel.addEventListener("click", (ev) => {
 const AI = { mode: "sleep", ready: null, lvl: 0, buf: null, listening: false, floor: 0.02, greet: [], placed: false, last: 0,
              squash: 0, squashV: 0, flare: 0, wakeT: -1e9, touch: [{}, {}],
              nextBlink: 0, blinkT: -1e9, hopT: -1e9 };
+const GNAME = /\b(grok|grock|groc|grog|groke|growk|grokk)\b/i;          // his name anywhere in a sentence
+const GSLEEP = /\b(go (back )?to sleep|good ?night|nap time|take a nap|stop listening|sleep now)\b/i;
+// may he answer this sentence without hearing his name? (name mode off, an open yes/no question, or he just spoke)
+const grokFree = () => !S.grokNeedName || !!AI.pending || performance.now() - (AI.spokeEnd || 0) < (S.grokFollowMs || 7000);
 const WAKE = /\b(hey|hi|hay|ok|okay|yo|a)\W{0,3}(grok|grock|groc|grog|groke|growk|brock|crock|rock|grow)\b/i;
 const GREETINGS = ["Hey!", "Yeah?", "What's up?"];
 const gv3 = new THREE.Vector3(), gv4 = new THREE.Vector3(), gv5 = new THREE.Vector3(), gq1 = new THREE.Quaternion();
@@ -5028,7 +5034,7 @@ function vadTick() {
   }
   if (AI.speech && (AI.quietMs > (S.grokPauseMs || 650) || age > 15000)) {                // a sentence just ended (or a long one): check it
     AI.t0 = now;                                                          // for the timing note
-    if (AI.mode === "awake") { aiMode("thinking"); AI.req = (AI.req || 0) + 1; }   // show right away that he caught it
+    if (AI.mode === "awake" && grokFree()) { aiMode("thinking"); AI.req = (AI.req || 0) + 1; }   // show right away that he caught it
     return recCut(true);
   }
   if (!AI.speech && age > 3000) recCut(false);                          // nothing said: throw away the silence
@@ -5049,8 +5055,17 @@ async function handleClip(blob) {
     const words = heard.replace(WAKE, "").replace(/^\W*(search( for)?|find|look( for)?|show me)\s+/i, "").replace(/[.?!]+$/, "").trim();
     if (words) { doSearch(words); return aiSpeak("Searching for " + words + ".", "awake"); }
   }
+  const named = GNAME.test(heard);
+  if (!named && !grokFree()) {                                          // just people talking (a voiceover, a friend): ignore it
+    if (S.grokDebug) aiNote("Skipped (no 'Grok'): " + heard);
+    if (AI.mode === "thinking") aiMode("awake");
+    return;
+  }
+  if (GSLEEP.test(heard)) { AI.req = (AI.req || 0) + 1; return aiSpeak("Okay, nap time.", "sleep"); }
+  if (named && AI.mode === "awake") aiMode("thinking");
   const m = heard.match(WAKE);
-  const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "");
+  const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "").replace(/^(grok|grock|groc|grog|groke|growk|grokk)\b[\s,.!?]*/i, "")
+    .replace(/[\s,]*\b(grok|grock|groc|grog|groke|growk|grokk)\W*$/i, "");      // "pull up the Lakers game, Grok"
   if (q.split(/\s+/).filter(Boolean).length) aiAnswer(q);
   else if (AI.mode === "thinking") aiMode("awake");
 }
@@ -5090,6 +5105,7 @@ function aiVoiceEl() {
 // the instant he stops is caught; for the first 0.25 s loudness is not judged (the tail of his own voice), but it is recorded
 function listenNow() {
   AI.deafUntil = performance.now() + 250; AI.freshClip = false;
+  AI.spokeEnd = performance.now();                                      // a reply right after him needs no name
   if (AI.listening && AI.rec) { try { recCut(false); } catch (e) {} }
 }
 function aiVoiceDone() {
