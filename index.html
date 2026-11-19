@@ -38,7 +38,7 @@
   #liveBtn.on { color: #ffb22e; }
   #voiceBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 6px; margin-top: 0; }
   #voiceBtn.on { color: #ffb22e; }
-  #arcBtn { background: transparent; color: #6f7782; border: 0; font-size: 12px; padding: 6px; margin-top: 0; }
+  #arcBtn { background: transparent; color: #50565f; border: 0; font-size: 11px; padding: 4px; margin-top: 2px; text-decoration: underline; }
   #arcPanel { text-align: left; font-size: 12.5px; color: #c9cfd6; background: #15171a; border: 1px solid #2c3037;
               border-radius: 10px; padding: 12px 14px; margin-top: 6px; max-height: 42vh; overflow: auto; line-height: 1.5; }
   #arcPanel a { color: #ffc552; }
@@ -65,7 +65,7 @@
     <button id="windowBtn">View on this screen instead</button>
     <button id="liveBtn" style="display:none">Owner: turn on live trading</button>
     <button id="voiceBtn" style="display:none">Turn on the voice assistant (microphone)</button>
-    <button id="arcBtn">Blockchain setup</button>
+    <button id="arcBtn">Advanced: practice network</button>
     <div id="arcPanel" style="display:none"></div>
     <p id="wStatus">Loading markets from Gemini...</p>
     <p class="fine">Demo with test money only. No real money is used or paid out.<br>
@@ -110,7 +110,7 @@ const SETTINGS = {
   liveBudget: 10,       // live mode only: shown until the real Gemini balance arrives (and used if the server cannot fetch it)
   oddsAnim: true,       // numbers slide up or down and flash green or red when the odds change
   assistant: true,
-  grokDebug: true,
+  grokDebug: false,
   grokPauseMs: 650,    // how long a silence means you finished your sentence (ms); longer = patient with slow talkers
   grokInterrupt: false, // true = you can cut Grok off while he talks; false = he finishes first (the older behaviour)      // testing aid: a small note under Grok shows what he heard and any problem. Set false for the demo     // the talking orb (needs serverUrl, with Grok and ElevenLabs keys on the server)
   icons: true,          // show Gemini's market pictures (needs serverUrl, which passes them through)
@@ -718,7 +718,7 @@ function reportErr(tag, e) {
   const here = String(e && e.stack || "").split("\n").find((s) => s.indexOf(location.pathname) >= 0 && s.indexOf(".js") < 0) || "";
   const m = /:(\d+):\d+\)?\s*$/.exec(here);
   console.error("[" + tag + "]", e);
-  try { aiNote("Error " + (m ? "L" + m[1] + " " : "") + tag + ": " + msg); } catch (x) {}
+  if (S.grokDebug) try { aiNote("Error " + (m ? "L" + m[1] + " " : "") + tag + ": " + msg); } catch (x) {}   // on screen only while testing
 }
 window.addEventListener("error", (ev) => reportErr("page", ev.error || ev.message));
 window.addEventListener("unhandledrejection", (ev) => reportErr("async", ev.reason));
