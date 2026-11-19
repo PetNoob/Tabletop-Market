@@ -348,6 +348,7 @@ AFRAME.registerComponent("xr-input", {
      "market" = one market: its answers, a price graph, two pills to pick a side
    ====================================================================== */
 const S = SETTINGS, THREE = AFRAME.THREE;
+if (/[?&]debug=1(&|$)/.test(location.search)) S.grokDebug = true;            // ?debug=1: Grok shows what he heard
 const C = { base: "#15171a", court: "#202328", panel: "#1b1e22", key: "#2b2f36", keyOn: "#434a54", line: "#4d535d",
             text: "#f2f4f7", dim: "#b0b8c3", green: "#2fbf71", greenInk: "#06210f", red: "#e5484d", handle: "#5d646e", walletOn: "#5a3315",
             acc: "#ff8c32", accInk: "#1f0e00" };
@@ -4826,7 +4827,7 @@ arcPanel.addEventListener("click", (ev) => {
 const AI = { mode: "sleep", ready: null, lvl: 0, buf: null, listening: false, floor: 0.02, greet: [], placed: false, last: 0,
              squash: 0, squashV: 0, flare: 0, wakeT: -1e9, touch: [{}, {}],
              nextBlink: 0, blinkT: -1e9, hopT: -1e9 };
-const GNAME = /\b(grok|grock|groc|grog|groke|growk|grokk)\b/i;          // his name anywhere in a sentence
+const GNAME = /\b(grok|groq|grock|groc|grog|grogg|groke|growk|grokk|grook|grox|gruk|grokh)\b/i;          // his name anywhere in a sentence
 const GSLEEP = /\b((go|get|fall|drift|head) (back )?(to )?(sleep|asleep)|go (back )?to bed|good ?night|night night|nap time|(take|have) a nap|sleep mode|stop listening|goodbye)\b/i;   // clear phrases only ("cash out the rest" must not match)
 // may he answer this sentence without hearing his name? (name mode off, an open yes/no question, or he just spoke)
 const grokFree = () => !S.grokNeedName || !!AI.pending || performance.now() - (AI.spokeEnd || 0) < (S.grokFollowMs || 7000);
@@ -5055,7 +5056,7 @@ async function handleClip(blob) {
     const words = heard.replace(WAKE, "").replace(/^\W*(search( for)?|find|look( for)?|show me)\s+/i, "").replace(/[.?!]+$/, "").trim();
     if (words) { doSearch(words); return aiSpeak("Searching for " + words + ".", "awake"); }
   }
-  const named = GNAME.test(heard);
+  const named = GNAME.test(heard) || WAKE.test(heard);
   if (!named && !grokFree()) {                                          // just people talking (a voiceover, a friend): ignore it
     if (S.grokDebug) aiNote("Skipped (no 'Grok'): " + heard);
     if (AI.mode === "thinking") aiMode("awake");
@@ -5064,8 +5065,8 @@ async function handleClip(blob) {
   if (GSLEEP.test(heard)) { AI.req = (AI.req || 0) + 1; return aiSpeak("Okay, nap time.", "sleep"); }
   if (named && AI.mode === "awake") aiMode("thinking");
   const m = heard.match(WAKE);
-  const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "").replace(/^(grok|grock|groc|grog|groke|growk|grokk)\b[\s,.!?]*/i, "")
-    .replace(/[\s,]*\b(grok|grock|groc|grog|groke|growk|grokk)\W*$/i, "");      // "pull up the Lakers game, Grok"
+  const q = (m ? heard.slice(m.index + m[0].length) : heard).replace(/^[\s,.!?]+/, "").replace(/^(grok|groq|grock|groc|grog|grogg|groke|growk|grokk|grook|grox|gruk|grokh)\b[\s,.!?]*/i, "")
+    .replace(/[\s,]*\b(grok|groq|grock|groc|grog|grogg|groke|growk|grokk|grook|grox|gruk|grokh)\W*$/i, "");      // "pull up the Lakers game, Grok"
   if (q.split(/\s+/).filter(Boolean).length) aiAnswer(q);
   else if (AI.mode === "thinking") aiMode("awake");
 }
@@ -5121,8 +5122,8 @@ function aiHush() {
 }
 function aiSpeak(text, then, id) {
   return new Promise((resolve) => {
-    if (id && id !== AI.req) return resolve();                          // you already asked something newer
-    if (AI.mode === "awake" && AI.speech) return resolve();             // you started talking: don't talk over you
+    if (id && id !== AI.req) { AI.sleepAfter = false; return resolve(); }   // you already asked something newer
+    if (AI.mode === "awake" && AI.speech) { if (AI.sleepAfter) { AI.sleepAfter = false; aiMode("sleep"); } return resolve(); }   // you started talking: don't talk over you
     const a = aiVoiceEl(), finish = (mode) => { aiVoiceDone(); if (AI.sleepAfter) { AI.sleepAfter = false; mode = "sleep"; } aiMode(mode); resolve(); };
     a.onplaying = () => {
       if (id && id !== AI.req) { a.pause(); return finish("awake"); }
